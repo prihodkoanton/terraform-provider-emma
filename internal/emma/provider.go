@@ -192,6 +192,8 @@ func (p *Provider) DataSources(_ context.Context) []func() datasource.DataSource
 		NewLocationDataSource,
 		NewOperatingSystemDataSource,
 		NewProviderDataSource,
+		NewVolumeDataSource,
+		NewVolumeConfigurationsDataSource,
 	}
 }
 
@@ -203,6 +205,7 @@ func (p *Provider) Resources(_ context.Context) []func() resource.Resource {
 		NewSecurityGroupResource,
 		NewSpotInstanceResource,
 		NewKubernetesResource,
+		NewVolumeResource,
 	}
 }
 

@@ -287,11 +287,12 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	tflog.Info(ctx, "Create vm")
 
 	// If applicable, this is a great opportunity to initialize any necessary
+	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	var vmCreateRequest emmaSdk.VmCreate
 	ConvertToVmCreateRequest(data, &vmCreateRequest)
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	vm, response, err := r.apiClient.VirtualMachinesAPI.VmCreate(auth).VmCreate(vmCreateRequest).Execute()
+	vmNew, response, err := r.apiClient.VirtualMachinesAPI.VmCreate(auth).VmCreate(vmCreateRequest).Execute()
 
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error",
@@ -300,7 +301,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		return
 	}
 
-	ConvertVmResponseToResource(ctx, &data, nil, vm, resp.Diagnostics)
+	ConvertVmNewResponseToResource(ctx, &data, nil, vmNew, resp.Diagnostics)
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -367,8 +368,8 @@ func ResizeVolume(ctx context.Context, stateData *vmResourceModel, resp *resourc
 		resp.Diagnostics.AddError("Validation Error", "Bootable disk not found")
 		return
 	}
-	volumeEdit := emmaSdk.VolumeActionsRequest{VolumeEdit: emmaSdk.NewVolumeEdit("edit", volumeId)}
-	volume, response, err := r.apiClient.VolumesAPI.VolumeActions(ctx, int32(bootableDisk.Id.ValueInt64())).VolumeActionsRequest(volumeEdit).Execute()
+	volumeEdit := emmaSdk.NewVolumeEdit("edit", volumeId)
+	volume, response, err := r.apiClient.VolumesAPI.VolumeActions(ctx, int32(bootableDisk.Id.ValueInt64())).VolumeEdit(*volumeEdit).Execute()
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error",
 			fmt.Sprintf("Unable to resize volume, got error: %s",
@@ -687,4 +688,97 @@ func (o vmResourceNetworkModel) attrTypes() map[string]attr.Type {
 		"network_type_id": types.Int64Type,
 		"network_type":    types.StringType,
 	}
+}
+
+
+// ConvertVmNewResponseToResource wraps ConvertVmResponseToResource for VmNew type
+func ConvertVmNewResponseToResource(ctx context.Context, stateData *vmResourceModel, planData *vmResourceModel, vmNew *emmaSdk.VmNew, diags diag.Diagnostics) {
+	// Convert VmNew to Vm by copying fields
+	vm := &emmaSdk.Vm{
+		Id:               vmNew.Id,
+		Name:             vmNew.Name,
+		Status:           vmNew.Status,
+		VCpu:             vmNew.VCpu,
+		VCpuType:         vmNew.VCpuType,
+		CloudNetworkType: vmNew.CloudNetworkType,
+		RamGb:            vmNew.RamGb,
+		SshKeyId:         vmNew.SshKeyId,
+		UserPassword:     vmNew.UserPassword,
+	}
+	
+	// Convert nested objects - only copy fields that exist in both types
+	if vmNew.Provider != nil {
+		vm.Provider = &emmaSdk.VmProvider{
+			Id:   vmNew.Provider.Id,
+			Name: vmNew.Provider.Name,
+			// Type field doesn't exist in VmProvider in v0.0.10
+		}
+	}
+	
+	if vmNew.Location != nil {
+		vm.Location = &emmaSdk.VmLocation{
+			Id:   vmNew.Location.Id,
+			Name: vmNew.Location.Name,
+			// Country field doesn't exist in VmLocation in v0.0.10
+		}
+	}
+	
+	if vmNew.DataCenter != nil {
+		vm.DataCenter = &emmaSdk.VmDataCenter{
+			Id:   vmNew.DataCenter.Id,
+			Name: vmNew.DataCenter.Name,
+		}
+	}
+	
+	if vmNew.Os != nil {
+		vm.Os = &emmaSdk.VmOs{
+			Id: vmNew.Os.Id,
+			// Name field doesn't exist in VmOs in v0.0.10
+		}
+	}
+	
+	if vmNew.SecurityGroup != nil {
+		vm.SecurityGroup = &emmaSdk.VmSecurityGroup{
+			Id:   vmNew.SecurityGroup.Id,
+			Name: vmNew.SecurityGroup.Name,
+		}
+	}
+	
+	if vmNew.Cost != nil {
+		vm.Cost = &emmaSdk.VmCost{
+			Currency: vmNew.Cost.Currency,
+			Price:    vmNew.Cost.Price,
+			Unit:     vmNew.Cost.Unit,
+		}
+	}
+	
+	// Convert disks
+	if vmNew.Disks != nil {
+		vm.Disks = make([]emmaSdk.VmDisksInner, len(vmNew.Disks))
+		for i, disk := range vmNew.Disks {
+			vm.Disks[i] = emmaSdk.VmDisksInner{
+				Id:         disk.Id,
+				SizeGb:     disk.SizeGb,
+				TypeId:     disk.TypeId,
+				Type:       disk.Type,
+				IsBootable: disk.IsBootable,
+			}
+		}
+	}
+	
+	// Convert networks
+	if vmNew.Networks != nil {
+		vm.Networks = make([]emmaSdk.VmNetworksInner, len(vmNew.Networks))
+		for i, network := range vmNew.Networks {
+			vm.Networks[i] = emmaSdk.VmNetworksInner{
+				Id:            network.Id,
+				Ip:            network.Ip,
+				NetworkTypeId: network.NetworkTypeId,
+				NetworkType:   network.NetworkType,
+			}
+		}
+	}
+	
+	// Call the existing conversion function
+	ConvertVmResponseToResource(ctx, stateData, planData, vm, diags)
 }
