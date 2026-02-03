@@ -32,3 +32,10 @@ website/vendor
 
 # Keep windows files with windows line endings
 *.winfile eol=crlf
+.kiro/specs/volume-resource/design.md
+.kiro/specs/volume-resource/requirements.md
+.kiro/specs/volume-resource/tasks.md
+.kiro/steering/product.md
+.kiro/steering/structure.md
+.kiro/steering/tech.md
+terraform-provider-emma
