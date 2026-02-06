@@ -1,6 +1,7 @@
 package emma
 
 import (
+	"context"
 	"testing"
 
 	emmaSdk "github.com/emma-community/emma-go-sdk"
@@ -175,7 +176,7 @@ func TestConvertVolumeResponseToResource(t *testing.T) {
 
 		// Convert to resource model
 		var data volumeResourceModel
-		convertVolumeResponseToResource(nil, &data, volume, nil)
+		convertVolumeResponseToResource(context.TODO(), &data, volume, nil)
 
 		// Verify all fields are converted correctly
 		if data.Id.ValueString() != "12345" {
@@ -221,7 +222,7 @@ func TestConvertVolumeResponseToResource(t *testing.T) {
 
 		// Convert to resource model
 		var data volumeResourceModel
-		convertVolumeResponseToResource(nil, &data, volume, nil)
+		convertVolumeResponseToResource(context.TODO(), &data, volume, nil)
 
 		// Verify null fields are handled correctly
 		if !data.Name.IsNull() {
@@ -252,7 +253,7 @@ func TestConvertVolumeResponseToResource(t *testing.T) {
 
 		// Convert to resource model
 		var data volumeResourceModel
-		convertVolumeResponseToResource(nil, &data, volume, nil)
+		convertVolumeResponseToResource(context.TODO(), &data, volume, nil)
 
 		// Verify conversions
 		if data.Id.ValueString() != "2147483647" {

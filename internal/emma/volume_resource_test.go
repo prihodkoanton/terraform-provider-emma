@@ -94,7 +94,7 @@ func TestProperty1_VolumeCreationStoresCompleteState(t *testing.T) {
 			if data.ProjectId.IsNull() || data.ProjectId.IsUnknown() {
 				return false
 			}
-			if data.Provider.IsNull() || data.Provider.IsUnknown() {
+			if data.CloudProvider.IsNull() || data.CloudProvider.IsUnknown() {
 				return false
 			}
 			if data.Location.IsNull() || data.Location.IsUnknown() {
@@ -382,11 +382,7 @@ func TestProperty4_InvalidParameterRejection(t *testing.T) {
 			}
 
 			errorDetail := resp.Diagnostics.Errors()[0].Detail()
-			if errorDetail != "volume_gb must be at least 1 GB" {
-				return false
-			}
-
-			return true
+			return errorDetail == "volume_gb must be at least 1 GB"
 		},
 		gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 && len(s) < 50 }),
 		gen.Int64Range(-10000, -1),
@@ -417,11 +413,7 @@ func TestProperty4_InvalidParameterRejection(t *testing.T) {
 			}
 
 			errorDetail := resp.Diagnostics.Errors()[0].Detail()
-			if errorDetail != "volume_gb must be at least 1 GB" {
-				return false
-			}
-
-			return true
+			return errorDetail == "volume_gb must be at least 1 GB"
 		},
 		gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 && len(s) < 50 }),
 		gen.OneConstOf("ssd", "hdd", "ssd-plus"),
@@ -451,11 +443,7 @@ func TestProperty4_InvalidParameterRejection(t *testing.T) {
 			}
 
 			errorDetail := resp.Diagnostics.Errors()[0].Detail()
-			if errorDetail != "volume_type must not be empty" {
-				return false
-			}
-
-			return true
+			return errorDetail == "volume_type must not be empty"
 		},
 		gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 && len(s) < 50 }),
 		gen.Int64Range(1, 10000),
@@ -488,11 +476,7 @@ func TestProperty4_InvalidParameterRejection(t *testing.T) {
 			}
 
 			errorDetail := resp.Diagnostics.Errors()[0].Detail()
-			if errorDetail != "volume_type must not be empty" {
-				return false
-			}
-
-			return true
+			return errorDetail == "volume_type must not be empty"
 		},
 		gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 && len(s) < 50 }),
 		gen.Int64Range(1, 10000),
@@ -523,11 +507,7 @@ func TestProperty4_InvalidParameterRejection(t *testing.T) {
 			}
 
 			errorDetail := resp.Diagnostics.Errors()[0].Detail()
-			if errorDetail != "data_center_id must not be empty" {
-				return false
-			}
-
-			return true
+			return errorDetail == "data_center_id must not be empty"
 		},
 		gen.Int64Range(1, 10000),
 		gen.OneConstOf("ssd", "hdd", "ssd-plus"),
@@ -560,11 +540,7 @@ func TestProperty4_InvalidParameterRejection(t *testing.T) {
 			}
 
 			errorDetail := resp.Diagnostics.Errors()[0].Detail()
-			if errorDetail != "data_center_id must not be empty" {
-				return false
-			}
-
-			return true
+			return errorDetail == "data_center_id must not be empty"
 		},
 		gen.Int64Range(1, 10000),
 		gen.OneConstOf("ssd", "hdd", "ssd-plus"),
@@ -655,7 +631,7 @@ func TestProperty5_ReadOperationUpdatesState(t *testing.T) {
 			if initialData.ProjectId.ValueInt64() != int64(projectId) {
 				return false
 			}
-			if initialData.Provider.IsNull() || initialData.Provider.IsUnknown() {
+			if initialData.CloudProvider.IsNull() || initialData.CloudProvider.IsUnknown() {
 				return false
 			}
 			if initialData.Location.IsNull() || initialData.Location.IsUnknown() {

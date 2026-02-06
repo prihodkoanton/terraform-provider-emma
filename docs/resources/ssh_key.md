@@ -42,3 +42,11 @@ resource "emma_ssh_key" "ssh_key" {
 - `fingerprint` (String) SSH key fingerprint
 - `id` (String) ID of the SSH key
 - `private_key` (String) SSH private key
+
+## Import
+
+SSH keys can be imported using their ID:
+
+```shell
+terraform import emma_ssh_key.example 12345
+```

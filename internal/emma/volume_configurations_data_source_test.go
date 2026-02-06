@@ -159,11 +159,7 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 
 			// Verify list has only 3 elements (filtered for target data center)
 			elements := configList.Elements()
-			if len(elements) != 3 {
-				return false
-			}
-
-			return true
+			return len(elements) == 3
 		},
 		gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 && len(s) < 50 }),
 	))

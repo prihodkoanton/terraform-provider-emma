@@ -34,9 +34,9 @@ type volumeDataSourceModel struct {
 	AttachedToId types.Int64  `tfsdk:"attached_to_id"`
 	IsSystem     types.Bool   `tfsdk:"is_system"`
 	Status       types.String `tfsdk:"status"`
-	ProjectId    types.Int64  `tfsdk:"project_id"`
-	Provider     types.Object `tfsdk:"provider"`
-	Location     types.Object `tfsdk:"location"`
+	ProjectId     types.Int64  `tfsdk:"project_id"`
+	CloudProvider types.Object `tfsdk:"cloud_provider"`
+	Location      types.Object `tfsdk:"location"`
 	DataCenter   types.Object `tfsdk:"data_center"`
 	CreatedAt    types.String `tfsdk:"created_at"`
 }
@@ -103,7 +103,7 @@ func (d *volumeDataSource) Schema(ctx context.Context, req datasource.SchemaRequ
 				Description: "Project ID owning the volume",
 				Computed:    true,
 			},
-			"provider": schema.SingleNestedAttribute{
+			"cloud_provider": schema.SingleNestedAttribute{
 				Description: "Cloud provider information",
 				Computed:    true,
 				Attributes: map[string]schema.Attribute{
@@ -285,10 +285,10 @@ func convertVolumeResponseToDataSource(ctx context.Context, data *volumeDataSour
 			Name: types.StringValue(*volume.Provider.Name),
 		}
 		providerObj, providerDiag := types.ObjectValueFrom(ctx, providerModel.attrTypes(), providerModel)
-		data.Provider = providerObj
+		data.CloudProvider = providerObj
 		diags.Append(providerDiag...)
 	} else {
-		data.Provider = types.ObjectNull(volumeDataSourceProviderModel{}.attrTypes())
+		data.CloudProvider = types.ObjectNull(volumeDataSourceProviderModel{}.attrTypes())
 	}
 
 	// Convert location nested object

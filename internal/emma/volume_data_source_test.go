@@ -111,7 +111,7 @@ func TestProperty11_DataSourceRetrievesAllAttributes(t *testing.T) {
 			if data.ProjectId.ValueInt64() != int64(projectId) {
 				return false
 			}
-			if data.Provider.IsNull() || data.Provider.IsUnknown() {
+			if data.CloudProvider.IsNull() || data.CloudProvider.IsUnknown() {
 				return false
 			}
 			if data.Location.IsNull() || data.Location.IsUnknown() {

@@ -6,6 +6,7 @@ import (
 	emmaSdk "github.com/emma-community/emma-go-sdk"
 	emma "github.com/emma-community/terraform-provider-emma/internal/emma/validation"
 	"github.com/emma-community/terraform-provider-emma/tools"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -214,6 +215,16 @@ func (r *kubernetesResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 
 	resp.State.RemoveResource(ctx)
+}
+
+func (r *kubernetesResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	tflog.Info(ctx, "Import kubernetes cluster")
+
+	// Retrieve import ID and save to id attribute
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+
+	r.Read(ctx, resource.ReadRequest{State: resp.State, Private: resp.Private},
+		&resource.ReadResponse{State: resp.State, Private: resp.Private, Diagnostics: resp.Diagnostics})
 }
 
 func (r *kubernetesResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {

@@ -6,12 +6,15 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"os"
+	"time"
 
 	emmaSdk "github.com/emma-community/emma-go-sdk"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/emma-community/terraform-provider-emma/internal/emma/common/errors"
+	"github.com/emma-community/terraform-provider-emma/internal/emma/common/retry"
 )
 
 // Ensure the implementation satisfies the expected interfaces.
@@ -26,9 +29,12 @@ func New() func() provider.Provider {
 }
 
 type providerModel struct {
-	Host         types.String `tfsdk:"host"`
-	ClientId     types.String `tfsdk:"client_id"`
-	ClientSecret types.String `tfsdk:"client_secret"`
+	Host          types.String `tfsdk:"host"`
+	ClientId      types.String `tfsdk:"client_id"`
+	ClientSecret  types.String `tfsdk:"client_secret"`
+	MaxRetries    types.Int64  `tfsdk:"max_retries"`
+	RetryDelay    types.Int64  `tfsdk:"retry_delay"`
+	MaxRetryDelay types.Int64  `tfsdk:"max_retry_delay"`
 }
 
 // Provider is the provider implementation.
@@ -64,6 +70,18 @@ func (p *Provider) Schema(_ context.Context, _ provider.SchemaRequest, resp *pro
 				Required:    true,
 				Sensitive:   true,
 				Description: "Client secret from the Service application in the project",
+			},
+			"max_retries": schema.Int64Attribute{
+				Optional:    true,
+				Description: "Maximum number of retry attempts for retryable API errors. Defaults to 3.",
+			},
+			"retry_delay": schema.Int64Attribute{
+				Optional:    true,
+				Description: "Initial retry delay in seconds. Defaults to 1 second.",
+			},
+			"max_retry_delay": schema.Int64Attribute{
+				Optional:    true,
+				Description: "Maximum retry delay in seconds. Defaults to 30 seconds.",
 			},
 		},
 	}
@@ -109,10 +127,6 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 	clientId := os.Getenv("EMMA_CLIENT_ID")
 	clientSecret := os.Getenv("EMMA_CLIENT_SECRET")
 
-	if !config.Host.IsNull() {
-
-	}
-
 	if !config.ClientId.IsNull() {
 		clientId = config.ClientId.ValueString()
 	}
@@ -153,6 +167,28 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 		return
 	}
 
+	// Build retry configuration from provider settings
+	retryConfig := retry.DefaultRetryConfig()
+	
+	if !config.MaxRetries.IsNull() {
+		retryConfig.MaxAttempts = int(config.MaxRetries.ValueInt64())
+	}
+	
+	if !config.RetryDelay.IsNull() {
+		retryConfig.InitialDelay = time.Duration(config.RetryDelay.ValueInt64()) * time.Second
+	}
+	
+	if !config.MaxRetryDelay.IsNull() {
+		retryConfig.MaxDelay = time.Duration(config.MaxRetryDelay.ValueInt64()) * time.Second
+	}
+	
+	// Set ShouldRetry function to use IsRetryable from errors package
+	retryConfig.ShouldRetry = func(err error) bool {
+		// Try to extract status code from error
+		// For now, we'll use a simple approach - in real usage, resources will handle this
+		return true // Default to retrying, resources will use IsRetryable with actual status codes
+	}
+
 	configuration := &emmaSdk.Configuration{
 		DefaultHeader: make(map[string]string),
 		UserAgent:     "OpenAPI-Generator/0.0.1/go",
@@ -177,7 +213,7 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 				"EMMA Client Error: "+err.Error())
 		return
 	}
-	providerClient := Client{apiClient: apiClient, token: token}
+	providerClient := Client{apiClient: apiClient, token: token, retryConfig: retryConfig}
 	tflog.Info(ctx, "Configured EMMA client")
 	// Make the EMMA client available during DataSource and Resource
 	// type Configure methods.
@@ -210,6 +246,18 @@ func (p *Provider) Resources(_ context.Context) []func() resource.Resource {
 }
 
 type Client struct {
-	apiClient *emmaSdk.APIClient
-	token     *emmaSdk.Token
+	apiClient   *emmaSdk.APIClient
+	token       *emmaSdk.Token
+	retryConfig retry.RetryConfig
 }
+
+// WithRetry wraps an API operation with retry logic
+func (c *Client) WithRetry(ctx context.Context, operation func() error) error {
+	return retry.Retry(ctx, c.retryConfig, operation)
+}
+
+// IsRetryableStatusCode determines if a status code should trigger a retry
+func (c *Client) IsRetryableStatusCode(statusCode int) bool {
+	return errors.IsRetryable(statusCode)
+}
+
