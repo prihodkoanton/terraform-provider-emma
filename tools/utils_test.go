@@ -16,7 +16,7 @@ func TestExtractErrorMessage(t *testing.T) {
 	httpResponse.Body = readCloser
 	extractedMessage := ExtractErrorMessage(&httpResponse)
 	assert.Equal(t, "testMessage", extractedMessage)
-	_ = readCloser.Close()
+	readCloser.Close()
 }
 
 func TestStringToInt32(t *testing.T) {

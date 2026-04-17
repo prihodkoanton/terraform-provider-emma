@@ -5,11 +5,10 @@ go 1.22.7
 toolchain go1.23.1
 
 require (
-	github.com/emma-community/emma-go-sdk v0.0.10
+	github.com/emma-community/emma-go-sdk v0.0.8
 	github.com/hashicorp/terraform-plugin-docs v0.20.1
 	github.com/hashicorp/terraform-plugin-framework v1.13.0
 	github.com/hashicorp/terraform-plugin-log v0.9.0
-	github.com/leanovate/gopter v0.2.11
 	github.com/stretchr/testify v1.9.0
 )
 

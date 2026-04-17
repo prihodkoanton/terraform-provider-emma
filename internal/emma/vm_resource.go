@@ -4,10 +4,6 @@ import (
 	"context"
 	"fmt"
 	emmaSdk "github.com/emma-community/emma-go-sdk"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/async"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/errors"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/retry"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/state"
 	emma "github.com/emma-community/terraform-provider-emma/internal/emma/validation"
 	"github.com/emma-community/terraform-provider-emma/tools"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -21,7 +17,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"net/http"
 	"strconv"
 	"strings"
 )
@@ -291,33 +286,21 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 
 	tflog.Info(ctx, "Create vm")
 
-	// Build VmCreate request from resource model
+	// If applicable, this is a great opportunity to initialize any necessary
+	// provider client data and make a call using it.
 	var vmCreateRequest emmaSdk.VmCreate
 	ConvertToVmCreateRequest(data, &vmCreateRequest)
-	
-	// Call Emma API to create VM
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	vmNew, response, err := r.apiClient.VirtualMachinesAPI.VmCreate(auth).VmCreate(vmCreateRequest).Execute()
+	vm, response, err := r.apiClient.VirtualMachinesAPI.VmCreate(auth).VmCreate(vmCreateRequest).Execute()
 
 	if err != nil {
-		statusCode := 0
-		apiError := ""
-		if response != nil {
-			statusCode = response.StatusCode
-			apiError = tools.ExtractErrorMessage(response)
-		}
-		
-		resourceErr := errors.NewError("emma_vm", "Create").
-			WithStatusCode(statusCode).
-			WithAPIError(apiError).
-			WithMessage(errors.MapHTTPError(statusCode, apiError)).
-			Build()
-		
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to create virtual machine, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 
-	ConvertVmNewResponseToResource(ctx, &data, nil, vmNew, resp.Diagnostics)
+	ConvertVmResponseToResource(ctx, &data, nil, vm, resp.Diagnostics)
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -335,36 +318,15 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 
 	tflog.Info(ctx, "Read vm")
 
-	// Extract VM ID from state
-	vmId := tools.StringToInt32(data.Id.ValueString())
-
-	// Call Emma API to get VM
+	// If applicable, this is a great opportunity to initialize any necessary
+	// provider client data and make a call using it.
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	vm, response, err := r.apiClient.VirtualMachinesAPI.GetVm(auth, vmId).Execute()
+	vm, response, err := r.apiClient.VirtualMachinesAPI.GetVm(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
 
 	if err != nil {
-		// Handle 404 errors by removing from state
-		if response != nil && response.StatusCode == 404 {
-			stateManager := state.NewStateManager(ctx)
-			stateManager.RemoveFromState(resp)
-			return
-		}
-
-		statusCode := 0
-		apiError := ""
-		if response != nil {
-			statusCode = response.StatusCode
-			apiError = tools.ExtractErrorMessage(response)
-		}
-		
-		resourceErr := errors.NewError("emma_vm", "Read").
-			WithID(data.Id.ValueString()).
-			WithStatusCode(statusCode).
-			WithAPIError(apiError).
-			WithMessage(errors.MapHTTPError(statusCode, apiError)).
-			Build()
-		
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to read virtual machine, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 
@@ -405,100 +367,14 @@ func ResizeVolume(ctx context.Context, stateData *vmResourceModel, resp *resourc
 		resp.Diagnostics.AddError("Validation Error", "Bootable disk not found")
 		return
 	}
-	
-	tflog.Debug(ctx, "Waiting for volume to reach stable state before resize", map[string]interface{}{
-		"volume_id": bootableDisk.Id.ValueInt64(),
-	})
-
-	// Wait for volume to reach stable state before resize
-	stateManager := state.NewStateTransitionManager(state.StateTransitionConfig{
-		ResourceType: "volume",
-		ResourceID:   fmt.Sprintf("%d", bootableDisk.Id.ValueInt64()),
-		StatusChecker: func(ctx context.Context) (string, error) {
-			vol, _, err := r.apiClient.VolumesAPI.GetVolume(ctx, int32(bootableDisk.Id.ValueInt64())).Execute()
-			if err != nil {
-				return "", err
-			}
-			if vol.Status == nil {
-				return "", fmt.Errorf("volume status is nil")
-			}
-			return *vol.Status, nil
-		},
-		TargetStates:       state.VolumeStableStates,
-		TransitionalStates: state.VolumeTransitionalStates,
-		FailureStates:      state.VolumeFailureStates,
-		Timeout:            async.DefaultTimeout,
-		PollInterval:       async.DefaultPollInterval,
-	})
-
-	if err := stateManager.WaitForStableState(ctx); err != nil {
-		resp.Diagnostics.AddError("State Transition Error",
-			fmt.Sprintf("Volume did not reach stable state before resize: %s", err.Error()))
-		return
-	}
-
-	tflog.Info(ctx, "Volume reached stable state, proceeding with resize", map[string]interface{}{
-		"volume_id": bootableDisk.Id.ValueInt64(),
-	})
-
-	// Perform resize with retry on state conflicts
-	retryConfig := retry.StateConflictRetryConfig()
-	var lastResponse *http.Response
-	var lastAPIError string
-	var volume *emmaSdk.Volume
-
-	err := retry.Retry(ctx, retryConfig, func() error {
-		volumeEdit := emmaSdk.NewVolumeEdit("edit", volumeId)
-		vol, response, err := r.apiClient.VolumesAPI.VolumeActions(ctx, int32(bootableDisk.Id.ValueInt64())).VolumeEdit(*volumeEdit).Execute()
-
-		lastResponse = response
-		volume = vol
-		if err != nil {
-			lastAPIError = tools.ExtractErrorMessage(response)
-			statusCode := 0
-			if response != nil {
-				statusCode = response.StatusCode
-			}
-
-			// Check if this is a state conflict error that should be retried
-			if retry.IsStateConflictError(err, statusCode, lastAPIError) {
-				tflog.Warn(ctx, "Volume resize failed due to state conflict, will retry", map[string]interface{}{
-					"volume_id":   bootableDisk.Id.ValueInt64(),
-					"status_code": statusCode,
-					"error":       lastAPIError,
-				})
-				return err
-			}
-
-			// Non-retryable error
-			return fmt.Errorf("non-retryable error: %w", err)
-		}
-
-		return nil
-	})
-
+	volumeEdit := emmaSdk.VolumeActionsRequest{VolumeEdit: emmaSdk.NewVolumeEdit("edit", volumeId)}
+	volume, response, err := r.apiClient.VolumesAPI.VolumeActions(ctx, int32(bootableDisk.Id.ValueInt64())).VolumeActionsRequest(volumeEdit).Execute()
 	if err != nil {
-		statusCode := 0
-		apiError := ""
-		if lastResponse != nil {
-			statusCode = lastResponse.StatusCode
-			apiError = lastAPIError
-		}
-		
-		resourceErr := errors.NewError("emma_vm", "Update").
-			WithID(stateData.Id.ValueString()).
-			WithStatusCode(statusCode).
-			WithAPIError(apiError).
-			WithMessage(fmt.Sprintf("Unable to resize volume: %s", errors.MapHTTPError(statusCode, apiError))).
-			Build()
-		
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to resize volume, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
-
-	tflog.Info(ctx, "Volume resize completed successfully", map[string]interface{}{
-		"volume_id": bootableDisk.Id.ValueInt64(),
-	})
 
 	var updatedDisks []VmResourceDiskModel
 	disks := GetVolumesAsList(ctx, stateData, resp.Diagnostics)
@@ -526,107 +402,21 @@ func ResizeVolume(ctx context.Context, stateData *vmResourceModel, resp *resourc
 }
 
 func EditHardware(ctx context.Context, stateData *vmResourceModel, resp *resource.UpdateResponse, r *vmResource, planData *vmResourceModel) {
-	vmId := tools.StringToInt32(stateData.Id.ValueString())
-	
-	tflog.Debug(ctx, "Waiting for VM to reach stable state before hardware edit", map[string]interface{}{
-		"vm_id": stateData.Id.ValueString(),
-	})
+	vmActionEditHardwareRequest := emmaSdk.VmActionsRequest{}
 
-	// Wait for VM to reach stable state before hardware edit
-	stateManager := state.NewStateTransitionManager(state.StateTransitionConfig{
-		ResourceType: "vm",
-		ResourceID:   stateData.Id.ValueString(),
-		StatusChecker: func(ctx context.Context) (string, error) {
-			vm, _, err := r.apiClient.VirtualMachinesAPI.GetVm(ctx, vmId).Execute()
-			if err != nil {
-				return "", err
-			}
-			if vm.Status == nil {
-				return "", fmt.Errorf("VM status is nil")
-			}
-			return *vm.Status, nil
-		},
-		TargetStates:       state.VMStableStates,
-		TransitionalStates: state.VMTransitionalStates,
-		FailureStates:      state.VMFailureStates,
-		Timeout:            async.DefaultTimeout,
-		PollInterval:       async.DefaultPollInterval,
-	})
-
-	if err := stateManager.WaitForStableState(ctx); err != nil {
-		resp.Diagnostics.AddError("State Transition Error",
-			fmt.Sprintf("VM did not reach stable state before hardware edit: %s", err.Error()))
-		return
-	}
-
-	tflog.Info(ctx, "VM reached stable state, proceeding with hardware edit", map[string]interface{}{
-		"vm_id": stateData.Id.ValueString(),
-	})
-
-	// Perform hardware edit with retry on state conflicts
-	retryConfig := retry.StateConflictRetryConfig()
-	var lastResponse *http.Response
-	var lastAPIError string
-	var vm *emmaSdk.Vm
-
-	err := retry.Retry(ctx, retryConfig, func() error {
-		vmActionEditHardwareRequest := emmaSdk.VmActionsRequest{}
-
-		vmEditHardware := emmaSdk.NewVmEditHardware("edithardware", int32(planData.VCpu.ValueInt64()),
-			int32(planData.RamGb.ValueInt64()), int32(planData.VolumeGb.ValueInt64()))
-		vmEditHardware.VCpuType = planData.VCpuType.ValueStringPointer()
-		vmActionEditHardwareRequest.VmEditHardware = vmEditHardware
-		
-		vmResult, response, err := r.apiClient.VirtualMachinesAPI.VmActions(ctx, vmId).VmActionsRequest(vmActionEditHardwareRequest).Execute()
-
-		lastResponse = response
-		vm = vmResult
-		if err != nil {
-			lastAPIError = tools.ExtractErrorMessage(response)
-			statusCode := 0
-			if response != nil {
-				statusCode = response.StatusCode
-			}
-
-			// Check if this is a state conflict error that should be retried
-			if retry.IsStateConflictError(err, statusCode, lastAPIError) {
-				tflog.Warn(ctx, "Hardware edit failed due to state conflict, will retry", map[string]interface{}{
-					"vm_id":       stateData.Id.ValueString(),
-					"status_code": statusCode,
-					"error":       lastAPIError,
-				})
-				return err
-			}
-
-			// Non-retryable error
-			return fmt.Errorf("non-retryable error: %w", err)
-		}
-
-		return nil
-	})
+	vmEditHardware := emmaSdk.NewVmEditHardware("edithardware", int32(planData.VCpu.ValueInt64()),
+		int32(planData.RamGb.ValueInt64()), int32(planData.VolumeGb.ValueInt64()))
+	vmEditHardware.VCpuType = planData.VCpuType.ValueStringPointer()
+	vmActionEditHardwareRequest.VmEditHardware = vmEditHardware
+	vm, response, err := r.apiClient.VirtualMachinesAPI.VmActions(ctx,
+		tools.StringToInt32(stateData.Id.ValueString())).VmActionsRequest(vmActionEditHardwareRequest).Execute()
 
 	if err != nil {
-		statusCode := 0
-		apiError := ""
-		if lastResponse != nil {
-			statusCode = lastResponse.StatusCode
-			apiError = lastAPIError
-		}
-		
-		resourceErr := errors.NewError("emma_vm", "Update").
-			WithID(stateData.Id.ValueString()).
-			WithStatusCode(statusCode).
-			WithAPIError(apiError).
-			WithMessage(fmt.Sprintf("Unable to edit hardware: %s", errors.MapHTTPError(statusCode, apiError))).
-			Build()
-		
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to edit hardware of the virtual machine, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
-
-	tflog.Info(ctx, "Hardware edit completed successfully", map[string]interface{}{
-		"vm_id": stateData.Id.ValueString(),
-	})
 
 	ConvertEditVmHardwareResponseToResource(ctx, stateData, planData, vm, resp.Diagnostics)
 }
@@ -660,110 +450,24 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 
 	tflog.Info(ctx, "Update vm")
 
+	// If applicable, this is a great opportunity to initialize any necessary
+	// provider client data and make a call using it.
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
 
-	// Handle security group changes
 	if !planData.SecurityGroupId.Equal(stateData.SecurityGroupId) {
 		if planData.SecurityGroupId.IsUnknown() || planData.SecurityGroupId.IsNull() {
 			stateData.SecurityGroupId = types.Int64Null()
 		} else {
 			vmId := tools.StringToInt32(stateData.Id.ValueString())
-			
-			tflog.Debug(ctx, "Waiting for VM to reach stable state before security group change", map[string]interface{}{
-				"vm_id": stateData.Id.ValueString(),
-			})
-
-			// Wait for VM to reach stable state before security group change
-			stateManager := state.NewStateTransitionManager(state.StateTransitionConfig{
-				ResourceType: "vm",
-				ResourceID:   stateData.Id.ValueString(),
-				StatusChecker: func(ctx context.Context) (string, error) {
-					vm, _, err := r.apiClient.VirtualMachinesAPI.GetVm(ctx, vmId).Execute()
-					if err != nil {
-						return "", err
-					}
-					if vm.Status == nil {
-						return "", fmt.Errorf("VM status is nil")
-					}
-					return *vm.Status, nil
-				},
-				TargetStates:       state.VMStableStates,
-				TransitionalStates: state.VMTransitionalStates,
-				FailureStates:      state.VMFailureStates,
-				Timeout:            async.DefaultTimeout,
-				PollInterval:       async.DefaultPollInterval,
-			})
-
-			if err := stateManager.WaitForStableState(ctx); err != nil {
-				resp.Diagnostics.AddError("State Transition Error",
-					fmt.Sprintf("VM did not reach stable state before security group change: %s", err.Error()))
-				return
-			}
-
-			tflog.Info(ctx, "VM reached stable state, proceeding with security group change", map[string]interface{}{
-				"vm_id": stateData.Id.ValueString(),
-			})
-
-			// Perform security group change with retry on state conflicts
-			retryConfig := retry.StateConflictRetryConfig()
-			var lastResponse *http.Response
-			var lastAPIError string
-			var vm *emmaSdk.Vm
-
-			err := retry.Retry(ctx, retryConfig, func() error {
-				securityGroupInstanceAdd := emmaSdk.SecurityGroupInstanceAdd{InstanceId: &vmId}
-				vmResult, response, err := r.apiClient.SecurityGroupsAPI.SecurityGroupInstanceAdd(ctx,
-					int32(planData.SecurityGroupId.ValueInt64())).SecurityGroupInstanceAdd(securityGroupInstanceAdd).Execute()
-
-				lastResponse = response
-				vm = vmResult
-				if err != nil {
-					lastAPIError = tools.ExtractErrorMessage(response)
-					statusCode := 0
-					if response != nil {
-						statusCode = response.StatusCode
-					}
-
-					// Check if this is a state conflict error that should be retried
-					if retry.IsStateConflictError(err, statusCode, lastAPIError) {
-						tflog.Warn(ctx, "Security group change failed due to state conflict, will retry", map[string]interface{}{
-							"vm_id":       stateData.Id.ValueString(),
-							"status_code": statusCode,
-							"error":       lastAPIError,
-						})
-						return err
-					}
-
-					// Non-retryable error
-					return fmt.Errorf("non-retryable error: %w", err)
-				}
-
-				return nil
-			})
-
+			securityGroupInstanceAdd := emmaSdk.SecurityGroupInstanceAdd{InstanceId: &vmId}
+			vm, response, err := r.apiClient.SecurityGroupsAPI.SecurityGroupInstanceAdd(auth,
+				int32(planData.SecurityGroupId.ValueInt64())).SecurityGroupInstanceAdd(securityGroupInstanceAdd).Execute()
 			if err != nil {
-				statusCode := 0
-				apiError := ""
-				if lastResponse != nil {
-					statusCode = lastResponse.StatusCode
-					apiError = lastAPIError
-				}
-				
-				resourceErr := errors.NewError("emma_vm", "Update").
-					WithID(stateData.Id.ValueString()).
-					WithStatusCode(statusCode).
-					WithAPIError(apiError).
-					WithMessage(fmt.Sprintf("Unable to add VM to security group: %s", errors.MapHTTPError(statusCode, apiError))).
-					Build()
-				
-				resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+				resp.Diagnostics.AddError("Client Error",
+					fmt.Sprintf("Unable to add virtual machine to security group, got error: %s",
+						tools.ExtractErrorMessage(response)))
 				return
 			}
-
-			tflog.Info(ctx, "Security group change completed successfully", map[string]interface{}{
-				"vm_id": stateData.Id.ValueString(),
-			})
-
 			ConvertVmResponseToResource(ctx, &stateData, &planData, vm, resp.Diagnostics)
 		}
 	}
@@ -792,32 +496,15 @@ func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, res
 
 	tflog.Info(ctx, "Delete vm")
 
-	vmId := tools.StringToInt32(data.Id.ValueString())
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	_, response, err := r.apiClient.VirtualMachinesAPI.VmDelete(auth, vmId).Execute()
+	_, response, err := r.apiClient.VirtualMachinesAPI.VmDelete(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
 
+	// If applicable, this is a great opportunity to initialize any necessary
+	// provider client data and make a call using it.
 	if err != nil {
-		// Handle 404 errors as successful deletion (idempotent)
-		if response != nil && response.StatusCode == 404 {
-			// VM already deleted, treat as success
-			return
-		}
-
-		statusCode := 0
-		apiError := ""
-		if response != nil {
-			statusCode = response.StatusCode
-			apiError = tools.ExtractErrorMessage(response)
-		}
-		
-		resourceErr := errors.NewError("emma_vm", "Delete").
-			WithID(data.Id.ValueString()).
-			WithStatusCode(statusCode).
-			WithAPIError(apiError).
-			WithMessage(errors.MapHTTPError(statusCode, apiError)).
-			Build()
-		
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to delete virtual machine, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 }
@@ -959,9 +646,7 @@ func ConvertVmResponseToResource(ctx context.Context, stateData *vmResourceModel
 	if planData != nil && !planData.SecurityGroupId.IsUnknown() && !planData.SecurityGroupId.IsNull() {
 		stateData.SecurityGroupId = planData.SecurityGroupId
 	} else if !stateData.SecurityGroupId.IsUnknown() && !stateData.SecurityGroupId.IsNull() {
-		if vm.SecurityGroup != nil && vm.SecurityGroup.Id != nil {
-			stateData.SecurityGroupId = types.Int64Value(int64(*vm.SecurityGroup.Id))
-		}
+		stateData.SecurityGroupId = types.Int64Value(int64(*vm.SecurityGroup.Id))
 	}
 
 	stateData.RamGb = types.Int64Value(int64(*vm.RamGb))
@@ -1002,97 +687,4 @@ func (o vmResourceNetworkModel) attrTypes() map[string]attr.Type {
 		"network_type_id": types.Int64Type,
 		"network_type":    types.StringType,
 	}
-}
-
-
-// ConvertVmNewResponseToResource wraps ConvertVmResponseToResource for VmNew type
-func ConvertVmNewResponseToResource(ctx context.Context, stateData *vmResourceModel, planData *vmResourceModel, vmNew *emmaSdk.VmNew, diags diag.Diagnostics) {
-	// Convert VmNew to Vm by copying fields
-	vm := &emmaSdk.Vm{
-		Id:               vmNew.Id,
-		Name:             vmNew.Name,
-		Status:           vmNew.Status,
-		VCpu:             vmNew.VCpu,
-		VCpuType:         vmNew.VCpuType,
-		CloudNetworkType: vmNew.CloudNetworkType,
-		RamGb:            vmNew.RamGb,
-		SshKeyId:         vmNew.SshKeyId,
-		UserPassword:     vmNew.UserPassword,
-	}
-	
-	// Convert nested objects - only copy fields that exist in both types
-	if vmNew.Provider != nil {
-		vm.Provider = &emmaSdk.VmProvider{
-			Id:   vmNew.Provider.Id,
-			Name: vmNew.Provider.Name,
-			// Type field doesn't exist in VmProvider in v0.0.10
-		}
-	}
-	
-	if vmNew.Location != nil {
-		vm.Location = &emmaSdk.VmLocation{
-			Id:   vmNew.Location.Id,
-			Name: vmNew.Location.Name,
-			// Country field doesn't exist in VmLocation in v0.0.10
-		}
-	}
-	
-	if vmNew.DataCenter != nil {
-		vm.DataCenter = &emmaSdk.VmDataCenter{
-			Id:   vmNew.DataCenter.Id,
-			Name: vmNew.DataCenter.Name,
-		}
-	}
-	
-	if vmNew.Os != nil {
-		vm.Os = &emmaSdk.VmOs{
-			Id: vmNew.Os.Id,
-			// Name field doesn't exist in VmOs in v0.0.10
-		}
-	}
-	
-	if vmNew.SecurityGroup != nil {
-		vm.SecurityGroup = &emmaSdk.VmSecurityGroup{
-			Id:   vmNew.SecurityGroup.Id,
-			Name: vmNew.SecurityGroup.Name,
-		}
-	}
-	
-	if vmNew.Cost != nil {
-		vm.Cost = &emmaSdk.VmCost{
-			Currency: vmNew.Cost.Currency,
-			Price:    vmNew.Cost.Price,
-			Unit:     vmNew.Cost.Unit,
-		}
-	}
-	
-	// Convert disks
-	if vmNew.Disks != nil {
-		vm.Disks = make([]emmaSdk.VmDisksInner, len(vmNew.Disks))
-		for i, disk := range vmNew.Disks {
-			vm.Disks[i] = emmaSdk.VmDisksInner{
-				Id:         disk.Id,
-				SizeGb:     disk.SizeGb,
-				TypeId:     disk.TypeId,
-				Type:       disk.Type,
-				IsBootable: disk.IsBootable,
-			}
-		}
-	}
-	
-	// Convert networks
-	if vmNew.Networks != nil {
-		vm.Networks = make([]emmaSdk.VmNetworksInner, len(vmNew.Networks))
-		for i, network := range vmNew.Networks {
-			vm.Networks[i] = emmaSdk.VmNetworksInner{
-				Id:            network.Id,
-				Ip:            network.Ip,
-				NetworkTypeId: network.NetworkTypeId,
-				NetworkType:   network.NetworkType,
-			}
-		}
-	}
-	
-	// Call the existing conversion function
-	ConvertVmResponseToResource(ctx, stateData, planData, vm, diags)
 }

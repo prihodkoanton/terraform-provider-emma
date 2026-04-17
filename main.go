@@ -9,12 +9,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
 
-// Version is set via ldflags during build
-var (
-	version = "dev"
-	commit  = "none"
-)
-
 // Run "go generate" to format provider terraform files and generate the docs for the registry/website
 
 // If you do not have terraform installed, you can remove the formatting command, but its suggested to

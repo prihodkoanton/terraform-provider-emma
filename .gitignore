@@ -32,9 +32,3 @@ website/vendor
 
 # Keep windows files with windows line endings
 *.winfile eol=crlf
-
-# Kiro development files
-.kiro/
-
-# Provider binary
-terraform-provider-emma
