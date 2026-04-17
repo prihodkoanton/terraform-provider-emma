@@ -6,6 +6,7 @@ import (
 	emmaSdk "github.com/emma-community/emma-go-sdk"
 	emma "github.com/emma-community/terraform-provider-emma/internal/emma/validation"
 	"github.com/emma-community/terraform-provider-emma/tools"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -100,11 +101,11 @@ func (r *kubernetesResource) Create(ctx context.Context, req resource.CreateRequ
 
 	tflog.Info(ctx, "Create kubernetes cluster")
 
-	var kubernetesCreate emmaSdk.KubernetesCreate
+	var kubernetesCreate emmaSdk.KubernetesCreateRequest
 	ConvertToKubernetesCreateResourceRequest(data, &kubernetesCreate)
 
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	kubernetesGroup, response, err := r.apiClient.KubernetesClustersAPI.CreateKubernetesCluster(auth).KubernetesCreate(kubernetesCreate).Execute()
+	kubernetesGroup, response, err := r.apiClient.KubernetesClustersAPI.CreateKubernetesCluster(auth).KubernetesCreateRequest(kubernetesCreate).Execute()
 
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create kubernetes cluster, got error: %s,\n %v", tools.ExtractErrorMessage(response), err))
@@ -112,7 +113,7 @@ func (r *kubernetesResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 
 	var result kubernetesModel
-	ConvertKubernetesResponseToResource(&result, kubernetesGroup, &data)
+	ConvertKubernetesCreateResponseToResource(&result, kubernetesGroup, &data)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -142,7 +143,7 @@ func (r *kubernetesResource) Read(ctx context.Context, req resource.ReadRequest,
 	}
 
 	var result kubernetesModel
-	ConvertKubernetesResponseToResource(&result, kubernetes, &data)
+	ConvertKubernetesGetResponseToResource(&result, kubernetes, &data)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -164,10 +165,10 @@ func (r *kubernetesResource) Update(ctx context.Context, req resource.UpdateRequ
 
 	tflog.Info(ctx, "Update kubernetes cluster")
 
-	var kubernetesUpdate emmaSdk.KubernetesUpdate
+	var kubernetesUpdate emmaSdk.KubernetesUpdateRequest
 	ConvertToKubernetesUpdateResourceRequest(planData, stateData, &kubernetesUpdate)
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	_, updateHttpResponse, updateError := r.apiClient.KubernetesClustersAPI.EditKubernetesCluster(auth, int32(stateData.Id.ValueInt64())).KubernetesUpdate(kubernetesUpdate).Execute()
+	_, updateHttpResponse, updateError := r.apiClient.KubernetesClustersAPI.EditKubernetesCluster(auth, int32(stateData.Id.ValueInt64())).KubernetesUpdateRequest(kubernetesUpdate).Execute()
 
 	if updateError != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update kubernetes cluster, got error: %s", tools.ExtractErrorMessage(updateHttpResponse)))
@@ -185,7 +186,7 @@ func (r *kubernetesResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 
 	var result kubernetesModel
-	ConvertKubernetesResponseToResource(&result, getKubernetes, &planData)
+	ConvertKubernetesGetResponseToResource(&result, getKubernetes, &planData)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -216,17 +217,28 @@ func (r *kubernetesResource) Delete(ctx context.Context, req resource.DeleteRequ
 	resp.State.RemoveResource(ctx)
 }
 
+func (r *kubernetesResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	tflog.Info(ctx, "Import kubernetes cluster")
+
+	// Retrieve import ID and save to id attribute
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+
+	r.Read(ctx, resource.ReadRequest{State: resp.State, Private: resp.Private},
+		&resource.ReadResponse{State: resp.State, Private: resp.Private, Diagnostics: resp.Diagnostics})
+}
+
 func (r *kubernetesResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_kubernetes_cluster"
 }
 
-func ConvertToKubernetesCreateResourceRequest(data kubernetesModel, kubernetes *emmaSdk.KubernetesCreate) {
+func ConvertToKubernetesCreateResourceRequest(data kubernetesModel, kubernetes *emmaSdk.KubernetesCreateRequest) {
 	kubernetes.Name = data.Name.ValueString()
 	kubernetes.DeploymentLocation = data.DeploymentLocation.ValueString()
+	kubernetes.K8sConnectionType = "public"
 
-	var workerNodes []emmaSdk.KubernetesCreateWorkerNodesInner
+	var workerNodes []emmaSdk.KubernetesCreateRequestWorkerNodesInner
 	for _, node := range data.WorkerNodes {
-		workerNodes = append(workerNodes, emmaSdk.KubernetesCreateWorkerNodesInner{
+		workerNodes = append(workerNodes, emmaSdk.KubernetesCreateRequestWorkerNodesInner{
 			Name:         node.Name.ValueString(),
 			DataCenterId: node.DataCenterID.ValueString(),
 			VCpuType:     node.VCpuType.ValueString(),
@@ -238,12 +250,12 @@ func ConvertToKubernetesCreateResourceRequest(data kubernetesModel, kubernetes *
 	}
 	kubernetes.WorkerNodes = workerNodes
 
-	autoscalingConfigs := convertToAutoScalingConfigs(data)
+	autoscalingConfigs := convertToAutoScalingCreateConfigs(data)
 	kubernetes.AutoscalingConfigs = autoscalingConfigs
 }
 
-func ConvertToKubernetesUpdateResourceRequest(planData kubernetesModel, stateData kubernetesModel, kubernetes *emmaSdk.KubernetesUpdate) {
-	var workerNodes []emmaSdk.KubernetesUpdateWorkerNodesInner
+func ConvertToKubernetesUpdateResourceRequest(planData kubernetesModel, stateData kubernetesModel, kubernetes *emmaSdk.KubernetesUpdateRequest) {
+	var workerNodes []emmaSdk.KubernetesUpdateRequestWorkerNodesInner
 
 	stateNodesSet := make(map[string]int64)
 	for _, stateNode := range stateData.WorkerNodes {
@@ -276,7 +288,7 @@ func ConvertToKubernetesUpdateResourceRequest(planData kubernetesModel, stateDat
 			id = nil
 		}
 
-		workerNodes = append(workerNodes, emmaSdk.KubernetesUpdateWorkerNodesInner{
+		workerNodes = append(workerNodes, emmaSdk.KubernetesUpdateRequestWorkerNodesInner{
 			Id:           id,
 			Name:         planNode.Name.ValueString(),
 			DataCenterId: planNode.DataCenterID.ValueString(),
@@ -290,23 +302,25 @@ func ConvertToKubernetesUpdateResourceRequest(planData kubernetesModel, stateDat
 
 	kubernetes.WorkerNodes = workerNodes
 
-	autoscalingConfigs := convertToAutoScalingConfigs(planData)
+	autoscalingConfigs := convertToAutoScalingUpdateConfigs(planData)
 	kubernetes.AutoscalingConfigs = autoscalingConfigs
 }
 
-func convertToAutoScalingConfigs(data kubernetesModel) []emmaSdk.KubernetesCreateAutoscalingConfigsInner {
+func convertToAutoScalingCreateConfigs(data kubernetesModel) []emmaSdk.KubernetesCreateRequestAutoscalingConfigsInner {
 	if data.AutoscalingConfigs == nil {
 		return nil
 	}
-	var autoscalingConfigs []emmaSdk.KubernetesCreateAutoscalingConfigsInner
+	var autoscalingConfigs []emmaSdk.KubernetesCreateRequestAutoscalingConfigsInner
 	for _, config := range *data.AutoscalingConfigs {
-		autoscalingConfig := emmaSdk.KubernetesCreateAutoscalingConfigsInner{
-			GroupName:                          config.GroupName.ValueString(),
-			DataCenterId:                       config.DataCenterId.ValueString(),
-			UseOnDemandInstancesInsteadOfSpots: config.UseOnDemandInstancesInsteadOfSpots.ValueBool(),
+		groupName := config.GroupName.ValueString()
+		dataCenterId := config.DataCenterId.ValueString()
+		useOnDemand := config.UseOnDemandInstancesInsteadOfSpots.ValueBool()
+		autoscalingConfig := emmaSdk.KubernetesCreateRequestAutoscalingConfigsInner{
+			GroupName:                          &groupName,
+			DataCenterId:                       &dataCenterId,
+			UseOnDemandInstancesInsteadOfSpots: &useOnDemand,
 			SpotMarkup:                         tools.ToFloat32PointerOrNil(config.SpotMarkup),
 			SpotPercent:                        tools.ToInt32PointerOrNil(config.SpotPercent),
-			NodeGroupPriceLimit:                tools.ToFloat32PointerOrNil(config.NodeGroupPriceLimit),
 			MinimumNodes:                       tools.ToInt32PointerOrNil(config.MinimumNodes),
 			MaximumNodes:                       tools.ToInt32PointerOrNil(config.MaximumNodes),
 			TargetNodes:                        tools.ToInt32PointerOrNil(config.TargetNodes),
@@ -315,9 +329,9 @@ func convertToAutoScalingConfigs(data kubernetesModel) []emmaSdk.KubernetesCreat
 			TargetVCpus:                        tools.ToInt32PointerOrNil(config.TargetVCpus),
 		}
 
-		var configurationPriorities []emmaSdk.KubernetesCreateAutoscalingConfigsInnerConfigurationPrioritiesInner
+		var configurationPriorities []emmaSdk.KubernetesListResponseInnerAutoscalingConfigsInnerConfigurationPrioritiesInner
 		for _, priority := range config.ConfigurationPriorities {
-			configurationPriorities = append(configurationPriorities, emmaSdk.KubernetesCreateAutoscalingConfigsInnerConfigurationPrioritiesInner{
+			configurationPriorities = append(configurationPriorities, emmaSdk.KubernetesListResponseInnerAutoscalingConfigsInnerConfigurationPrioritiesInner{
 				VCpuType:   tools.ToPointer(priority.VCpuType.ValueString()),
 				VCpu:       tools.Int64ToInt32Pointer(priority.VCpu.ValueInt64()),
 				RamGb:      tools.Int64ToInt32Pointer(priority.RamGb.ValueInt64()),
@@ -334,7 +348,44 @@ func convertToAutoScalingConfigs(data kubernetesModel) []emmaSdk.KubernetesCreat
 	return autoscalingConfigs
 }
 
-func ConvertKubernetesResponseToResource(result *kubernetesModel, response *emmaSdk.Kubernetes, planData *kubernetesModel) {
+func convertToAutoScalingUpdateConfigs(data kubernetesModel) []emmaSdk.KubernetesUpdateRequestAutoscalingConfigsInner {
+	if data.AutoscalingConfigs == nil {
+		return nil
+	}
+	var autoscalingConfigs []emmaSdk.KubernetesUpdateRequestAutoscalingConfigsInner
+	for _, config := range *data.AutoscalingConfigs {
+		autoscalingConfig := emmaSdk.KubernetesUpdateRequestAutoscalingConfigsInner{
+			GroupName:                          config.GroupName.ValueString(),
+			DataCenterId:                       config.DataCenterId.ValueString(),
+			UseOnDemandInstancesInsteadOfSpots: config.UseOnDemandInstancesInsteadOfSpots.ValueBool(),
+			SpotMarkup:                         tools.ToFloat32PointerOrNil(config.SpotMarkup),
+			SpotPercent:                        tools.ToInt32PointerOrNil(config.SpotPercent),
+			NodeGroupPriceLimit:                tools.ToFloat32PointerOrNil(config.NodeGroupPriceLimit),
+			MinimumNodes:                       tools.ToInt32PointerOrNil(config.MinimumNodes),
+			MaximumNodes:                       tools.ToInt32PointerOrNil(config.MaximumNodes),
+			TargetNodes:                        tools.ToInt32PointerOrNil(config.TargetNodes),
+		}
+
+		var configurationPriorities []emmaSdk.KubernetesListResponseInnerAutoscalingConfigsInnerConfigurationPrioritiesInner
+		for _, priority := range config.ConfigurationPriorities {
+			configurationPriorities = append(configurationPriorities, emmaSdk.KubernetesListResponseInnerAutoscalingConfigsInnerConfigurationPrioritiesInner{
+				VCpuType:   tools.ToPointer(priority.VCpuType.ValueString()),
+				VCpu:       tools.Int64ToInt32Pointer(priority.VCpu.ValueInt64()),
+				RamGb:      tools.Int64ToInt32Pointer(priority.RamGb.ValueInt64()),
+				VolumeGb:   tools.Int64ToInt32Pointer(priority.VolumeGb.ValueInt64()),
+				VolumeType: tools.ToPointer(priority.VolumeType.ValueString()),
+				Priority:   tools.ToPointer(priority.Priority.ValueString()),
+			})
+		}
+		autoscalingConfig.ConfigurationPriorities = configurationPriorities
+
+		autoscalingConfigs = append(autoscalingConfigs, autoscalingConfig)
+	}
+
+	return autoscalingConfigs
+}
+
+func ConvertKubernetesGetResponseToResource(result *kubernetesModel, response *emmaSdk.KubernetesGetResponse, planData *kubernetesModel) {
 	if response.Id != nil {
 		result.Id = types.Int64Value(int64(*response.Id))
 	} else {
@@ -379,12 +430,40 @@ func ConvertKubernetesResponseToResource(result *kubernetesModel, response *emma
 		result.WorkerNodes = planData.WorkerNodes
 	}
 
+	convertAutoscalingConfigsFromResponse(result, response.AutoscalingConfigs, planData)
+}
+
+func ConvertKubernetesCreateResponseToResource(result *kubernetesModel, response *emmaSdk.KubernetesCreateResponse, planData *kubernetesModel) {
+	if response.Id != nil {
+		result.Id = types.Int64Value(int64(*response.Id))
+	} else {
+		result.Id = types.Int64Null()
+	}
+
+	if response.Name != nil {
+		result.Name = types.StringValue(*response.Name)
+	} else {
+		result.Name = planData.Name
+	}
+
+	if response.DeploymentLocation != nil {
+		result.DeploymentLocation = types.StringValue(*response.DeploymentLocation)
+	} else {
+		result.DeploymentLocation = planData.DeploymentLocation
+	}
+
+	result.DomainName = planData.DomainName
+	result.WorkerNodes = planData.WorkerNodes
+	result.AutoscalingConfigs = planData.AutoscalingConfigs
+}
+
+func convertAutoscalingConfigsFromResponse(result *kubernetesModel, responseConfigs []emmaSdk.KubernetesListResponseInnerAutoscalingConfigsInner, planData *kubernetesModel) {
 	if planData.AutoscalingConfigs != nil && len(*planData.AutoscalingConfigs) > 0 &&
-		len(response.AutoscalingConfigs) == len(*planData.AutoscalingConfigs) {
+		len(responseConfigs) == len(*planData.AutoscalingConfigs) {
 
-		autoscalingConfigs := make([]autoscalingConfigModel, len(response.AutoscalingConfigs))
+		autoscalingConfigs := make([]autoscalingConfigModel, len(responseConfigs))
 
-		for i, config := range response.AutoscalingConfigs {
+		for i, config := range responseConfigs {
 			autoscalingConfig := autoscalingConfigModel{
 				GroupName:                          types.StringValue(*config.GroupName),
 				DataCenterId:                       types.StringValue(*config.DataCenterId),
