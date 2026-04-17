@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	emmaSdk "github.com/emma-community/emma-go-sdk"
+	"github.com/emma-community/terraform-provider-emma/internal/emma/common/convert"
+	"github.com/emma-community/terraform-provider-emma/internal/emma/common/errors"
+	"github.com/emma-community/terraform-provider-emma/internal/emma/common/state"
 	emma "github.com/emma-community/terraform-provider-emma/internal/emma/validation"
 	"github.com/emma-community/terraform-provider-emma/tools"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -15,7 +18,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"strconv"
+	"net/http"
 )
 
 var _ resource.Resource = &sshKeyResource{}
@@ -120,10 +123,10 @@ func (r *sshKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 
 	if (!data.Key.IsUnknown() && !data.Key.IsNull()) && (!data.KeyType.IsUnknown() && !data.KeyType.IsNull()) {
 		resp.Diagnostics.AddError("Validation Error",
-			fmt.Sprintf("Unable to create ssh key: contradicting fields: key_type, key"))
+			"Unable to create ssh key: contradicting fields: key_type, key")
 	} else if (data.Key.IsUnknown() || data.Key.IsNull()) && (data.KeyType.IsUnknown() || data.KeyType.IsNull()) {
 		resp.Diagnostics.AddError("Validation Error",
-			fmt.Sprintf("Unable to create ssh key: key or key_type is required"))
+			"Unable to create ssh key: key or key_type is required")
 	}
 
 	if resp.Diagnostics.HasError() {
@@ -141,9 +144,20 @@ func (r *sshKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 	sshKey, response, err := r.apiClient.SSHKeysAPI.SshKeysCreateImport(auth).SshKeysCreateImportRequest(sshKeyCreateImportRequest).Execute()
 
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error",
-			fmt.Sprintf("Unable to create ssh key, got error: %s",
-				tools.ExtractErrorMessage(response)))
+		statusCode := 0
+		apiError := ""
+		if response != nil {
+			statusCode = response.StatusCode
+			apiError = tools.ExtractErrorMessage(response)
+		}
+
+		resourceErr := errors.NewError("emma_ssh_key", "Create").
+			WithStatusCode(statusCode).
+			WithAPIError(apiError).
+			WithMessage(errors.MapHTTPError(statusCode, apiError)).
+			Build()
+
+		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
 		return
 	}
 
@@ -168,12 +182,43 @@ func (r *sshKeyResource) Read(ctx context.Context, req resource.ReadRequest, res
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	sshKey, response, err := r.apiClient.SSHKeysAPI.GetSshKey(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
+	
+	sshKeyId, err := convert.StringToInt32(data.Id)
+	if err != nil {
+		resourceErr := errors.NewError("emma_ssh_key", "Read").
+			WithID(data.Id.ValueString()).
+			WithMessage("Invalid SSH key ID format").
+			WithCause(err).
+			Build()
+		resp.Diagnostics.AddError("Validation Error", resourceErr.Error())
+		return
+	}
+	
+	sshKey, response, err := r.apiClient.SSHKeysAPI.GetSshKey(auth, sshKeyId).Execute()
 
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error",
-			fmt.Sprintf("Unable to read ssh key, got error: %s",
-				tools.ExtractErrorMessage(response)))
+		statusCode := 0
+		apiError := ""
+		if response != nil {
+			statusCode = response.StatusCode
+			apiError = tools.ExtractErrorMessage(response)
+
+			// Handle 404 by removing from state
+			if statusCode == http.StatusNotFound {
+				stateManager := state.NewStateManager(ctx)
+				stateManager.RemoveFromState(resp)
+				return
+			}
+		}
+
+		resourceErr := errors.NewError("emma_ssh_key", "Read").
+			WithID(data.Id.ValueString()).
+			WithStatusCode(statusCode).
+			WithAPIError(apiError).
+			WithMessage(errors.MapHTTPError(statusCode, apiError)).
+			Build()
+
+		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
 		return
 	}
 
@@ -193,10 +238,10 @@ func (r *sshKeyResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	if (!planData.Key.IsUnknown() && !planData.Key.IsNull()) && (!planData.KeyType.IsUnknown() && !planData.KeyType.IsNull()) {
 		resp.Diagnostics.AddError("Validation Error",
-			fmt.Sprintf("Unable to update ssh key: contradicting fields: key_type, key"))
+			"Unable to update ssh key: contradicting fields: key_type, key")
 	} else if (planData.Key.IsUnknown() || planData.Key.IsNull()) && (planData.KeyType.IsUnknown() || planData.KeyType.IsNull()) {
 		resp.Diagnostics.AddError("Validation Error",
-			fmt.Sprintf("Unable to update ssh key: key or key_type is required"))
+			"Unable to update ssh key: key or key_type is required")
 	}
 
 	tflog.Info(ctx, "Update ssh key")
@@ -208,14 +253,37 @@ func (r *sshKeyResource) Update(ctx context.Context, req resource.UpdateRequest,
 	// auth context for all api calls
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
 
+	sshKeyId, err := convert.StringToInt32(stateData.Id)
+	if err != nil {
+		resourceErr := errors.NewError("emma_ssh_key", "Update").
+			WithID(stateData.Id.ValueString()).
+			WithMessage("Invalid SSH key ID format").
+			WithCause(err).
+			Build()
+		resp.Diagnostics.AddError("Validation Error", resourceErr.Error())
+		return
+	}
+
 	var sshKeyUpdateRequest emmaSdk.SshKeyUpdate
 	ConvertToSshKeyUpdateRequest(planData, &sshKeyUpdateRequest)
-	sshKey, response, err := r.apiClient.SSHKeysAPI.SshKeyUpdate(auth, tools.StringToInt32(stateData.Id.ValueString())).SshKeyUpdate(sshKeyUpdateRequest).Execute()
+	sshKey, response, err := r.apiClient.SSHKeysAPI.SshKeyUpdate(auth, sshKeyId).SshKeyUpdate(sshKeyUpdateRequest).Execute()
 
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error",
-			fmt.Sprintf("Unable to update ssh key, got error: %s",
-				tools.ExtractErrorMessage(response)))
+		statusCode := 0
+		apiError := ""
+		if response != nil {
+			statusCode = response.StatusCode
+			apiError = tools.ExtractErrorMessage(response)
+		}
+
+		resourceErr := errors.NewError("emma_ssh_key", "Update").
+			WithID(stateData.Id.ValueString()).
+			WithStatusCode(statusCode).
+			WithAPIError(apiError).
+			WithMessage(errors.MapHTTPError(statusCode, apiError)).
+			Build()
+
+		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
 		return
 	}
 
@@ -242,14 +310,37 @@ func (r *sshKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 }
 
 func Delete(ctx context.Context, r *sshKeyResource, stateData sshKeyResourceModel, diag diag.Diagnostics) {
-	response, err := r.apiClient.SSHKeysAPI.SshKeyDelete(ctx, tools.StringToInt32(stateData.Id.ValueString())).Execute()
+	sshKeyId, err := convert.StringToInt32(stateData.Id)
+	if err != nil {
+		resourceErr := errors.NewError("emma_ssh_key", "Delete").
+			WithID(stateData.Id.ValueString()).
+			WithMessage("Invalid SSH key ID format").
+			WithCause(err).
+			Build()
+		diag.AddError("Validation Error", resourceErr.Error())
+		return
+	}
+
+	response, err := r.apiClient.SSHKeysAPI.SshKeyDelete(ctx, sshKeyId).Execute()
 
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	if err != nil {
-		diag.AddError("Client Error",
-			fmt.Sprintf("Unable to delete ssh key, got error: %s",
-				tools.ExtractErrorMessage(response)))
+		statusCode := 0
+		apiError := ""
+		if response != nil {
+			statusCode = response.StatusCode
+			apiError = tools.ExtractErrorMessage(response)
+		}
+
+		resourceErr := errors.NewError("emma_ssh_key", "Delete").
+			WithID(stateData.Id.ValueString()).
+			WithStatusCode(statusCode).
+			WithAPIError(apiError).
+			WithMessage(errors.MapHTTPError(statusCode, apiError)).
+			Build()
+
+		diag.AddError("Client Error", resourceErr.Error())
 		return
 	}
 }
@@ -286,19 +377,19 @@ func ConvertSshKey201ResponseToResource(data *sshKeyResourceModel, sshKeyRespons
 	if sshKeyResponse.SshKey != nil {
 		ConvertSshKeyResponseToResource(data, nil, sshKeyResponse.SshKey)
 	} else if sshKeyResponse.SshKeyGenerated != nil {
-		data.Id = types.StringValue(strconv.Itoa(int(*sshKeyResponse.SshKeyGenerated.Id)))
-		data.Name = types.StringValue(*sshKeyResponse.SshKeyGenerated.Name)
+		data.Id = convert.Int32ToString(sshKeyResponse.SshKeyGenerated.Id)
+		data.Name = convert.StringPointerToString(sshKeyResponse.SshKeyGenerated.Name)
 		if data.Key.IsUnknown() && data.Key.IsNull() {
 			data.Key = types.StringNull()
 		}
 		if !data.KeyType.IsUnknown() && !data.KeyType.IsNull() {
-			data.KeyType = types.StringValue(*sshKeyResponse.SshKeyGenerated.KeyType)
+			data.KeyType = convert.StringPointerToString(sshKeyResponse.SshKeyGenerated.KeyType)
 		} else {
 			data.KeyType = types.StringNull()
 		}
-		data.Fingerprint = types.StringValue(*sshKeyResponse.SshKeyGenerated.Fingerprint)
+		data.Fingerprint = convert.StringPointerToString(sshKeyResponse.SshKeyGenerated.Fingerprint)
 		if sshKeyResponse.SshKeyGenerated.PrivateKey != nil {
-			data.PrivateKey = types.StringValue(*sshKeyResponse.SshKeyGenerated.PrivateKey)
+			data.PrivateKey = convert.StringPointerToString(sshKeyResponse.SshKeyGenerated.PrivateKey)
 		} else if !data.PrivateKey.IsUnknown() && !data.PrivateKey.IsNull() {
 			//ignore
 		} else {
@@ -308,8 +399,8 @@ func ConvertSshKey201ResponseToResource(data *sshKeyResourceModel, sshKeyRespons
 }
 
 func ConvertSshKeyResponseToResource(stateData *sshKeyResourceModel, planData *sshKeyResourceModel, sshKeyResponse *emmaSdk.SshKey) {
-	stateData.Id = types.StringValue(strconv.Itoa(int(*sshKeyResponse.Id)))
-	stateData.Name = types.StringValue(*sshKeyResponse.Name)
+	stateData.Id = convert.Int32ToString(sshKeyResponse.Id)
+	stateData.Name = convert.StringPointerToString(sshKeyResponse.Name)
 	if planData != nil && !planData.Key.IsUnknown() && !planData.Key.IsNull() {
 		stateData.Key = planData.Key
 	} else if stateData.Key.IsUnknown() && stateData.Key.IsNull() {
@@ -317,11 +408,11 @@ func ConvertSshKeyResponseToResource(stateData *sshKeyResourceModel, planData *s
 	}
 	if (planData != nil && !planData.KeyType.IsUnknown() && !planData.KeyType.IsNull()) ||
 		(!stateData.KeyType.IsUnknown() && !stateData.KeyType.IsNull()) {
-		stateData.KeyType = types.StringValue(*sshKeyResponse.KeyType)
+		stateData.KeyType = convert.StringPointerToString(sshKeyResponse.KeyType)
 	} else {
 		stateData.KeyType = types.StringNull()
 	}
-	stateData.Fingerprint = types.StringValue(*sshKeyResponse.Fingerprint)
+	stateData.Fingerprint = convert.StringPointerToString(sshKeyResponse.Fingerprint)
 	if stateData.PrivateKey.IsNull() || stateData.PrivateKey.IsUnknown() {
 		stateData.PrivateKey = types.StringValue("")
 	}
