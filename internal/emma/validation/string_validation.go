@@ -81,7 +81,7 @@ func (v UserPassword) ValidateString(ctx context.Context, req validator.StringRe
 		}
 	}
 
-	if !hasLower || !hasUpper || !hasDigit || !hasSpecial {
+	if !(hasLower && hasUpper && hasDigit && hasSpecial) {
 		resp.Diagnostics.AddError("Validation Error", "Validation error, user_password must consist of 8 to 60 characters, including both upper- and lower-case Latin letters, digits, and symbols (|~`\"!@#$%&,.).")
 	}
 }

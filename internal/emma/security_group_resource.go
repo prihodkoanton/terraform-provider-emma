@@ -4,10 +4,6 @@ import (
 	"context"
 	"fmt"
 	emmaSdk "github.com/emma-community/emma-go-sdk"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/async"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/errors"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/retry"
-	"github.com/emma-community/terraform-provider-emma/internal/emma/common/state"
 	emma "github.com/emma-community/terraform-provider-emma/internal/emma/validation"
 	"github.com/emma-community/terraform-provider-emma/tools"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -20,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -181,17 +176,9 @@ func (r *securityGroupResource) Create(ctx context.Context, req resource.CreateR
 	securityGroup, response, err := r.apiClient.SecurityGroupsAPI.SecurityGroupCreate(auth).SecurityGroupRequest(securityGroupRequest).Execute()
 
 	if err != nil {
-		statusCode := 0
-		if response != nil {
-			statusCode = response.StatusCode
-		}
-		resourceErr := errors.NewError("emma_security_group", "Create").
-			WithStatusCode(statusCode).
-			WithAPIError(tools.ExtractErrorMessage(response)).
-			WithMessage(errors.MapHTTPError(statusCode, tools.ExtractErrorMessage(response))).
-			WithCause(err).
-			Build()
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to create security group, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 
@@ -223,25 +210,9 @@ func (r *securityGroupResource) Read(ctx context.Context, req resource.ReadReque
 	securityGroup, response, err := r.apiClient.SecurityGroupsAPI.GetSecurityGroup(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
 
 	if err != nil {
-		statusCode := 0
-		if response != nil {
-			statusCode = response.StatusCode
-		}
-		
-		// Handle 404 by removing from state
-		if statusCode == http.StatusNotFound {
-			resp.State.RemoveResource(ctx)
-			return
-		}
-		
-		resourceErr := errors.NewError("emma_security_group", "Read").
-			WithID(data.Id.ValueString()).
-			WithStatusCode(statusCode).
-			WithAPIError(tools.ExtractErrorMessage(response)).
-			WithMessage(errors.MapHTTPError(statusCode, tools.ExtractErrorMessage(response))).
-			WithCause(err).
-			Build()
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to read security group, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 
@@ -272,60 +243,12 @@ func (r *securityGroupResource) Update(ctx context.Context, req resource.UpdateR
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client planData and make a call using it.
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	
-	securityGroupID := tools.StringToInt32(stateData.Id.ValueString())
-
-	tflog.Debug(ctx, "Waiting for security group to reach RECOMPOSED state before update", map[string]interface{}{
-		"security_group_id": stateData.Id.ValueString(),
-	})
-
-	// Wait for security group to reach RECOMPOSED state before update
-	stateManager := state.NewStateTransitionManager(state.StateTransitionConfig{
-		ResourceType: "security_group",
-		ResourceID:   stateData.Id.ValueString(),
-		StatusChecker: func(ctx context.Context) (string, error) {
-			sg, _, err := r.apiClient.SecurityGroupsAPI.GetSecurityGroup(auth, securityGroupID).Execute()
-			if err != nil {
-				return "", err
-			}
-			if sg.RecomposingStatus == nil {
-				return "", fmt.Errorf("security group recomposing status is nil")
-			}
-			return *sg.RecomposingStatus, nil
-		},
-		TargetStates:       state.SecurityGroupStableStates,
-		TransitionalStates: state.SecurityGroupTransitionalStates,
-		FailureStates:      state.SecurityGroupFailureStates,
-		Timeout:            async.DefaultTimeout,
-		PollInterval:       async.DefaultPollInterval,
-	})
-
-	if err := stateManager.WaitForStableState(auth); err != nil {
-		resp.Diagnostics.AddError("State Transition Error",
-			fmt.Sprintf("Security group did not reach RECOMPOSED state before update: %s", err.Error()))
-		return
-	}
-
-	tflog.Info(ctx, "Security group reached RECOMPOSED state, proceeding with update", map[string]interface{}{
-		"security_group_id": stateData.Id.ValueString(),
-	})
-
-	// Get current security group to preserve default rules
-	securityGroup, response, err := r.apiClient.SecurityGroupsAPI.GetSecurityGroup(auth, securityGroupID).Execute()
+	securityGroup, response, err := r.apiClient.SecurityGroupsAPI.GetSecurityGroup(auth, tools.StringToInt32(stateData.Id.ValueString())).Execute()
 
 	if err != nil {
-		statusCode := 0
-		if response != nil {
-			statusCode = response.StatusCode
-		}
-		resourceErr := errors.NewError("emma_security_group", "Update").
-			WithID(stateData.Id.ValueString()).
-			WithStatusCode(statusCode).
-			WithAPIError(tools.ExtractErrorMessage(response)).
-			WithMessage(errors.MapHTTPError(statusCode, tools.ExtractErrorMessage(response))).
-			WithCause(err).
-			Build()
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to read security group, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 
@@ -338,79 +261,16 @@ func (r *securityGroupResource) Update(ctx context.Context, req resource.UpdateR
 
 	var securityGroupRequest emmaSdk.SecurityGroupRequest
 	ConvertToSecurityGroupUpdateRequest(ctx, planData, &securityGroupRequest, defaultSecurityGroupRules)
-
-	// Perform update with retry on state conflicts
-	retryConfig := retry.StateConflictRetryConfig()
-	var lastResponse *http.Response
-	var lastAPIError string
-	var updatedSecurityGroup *emmaSdk.SecurityGroup
-
-	err = retry.Retry(auth, retryConfig, func() error {
-		sgResult, response, err := r.apiClient.SecurityGroupsAPI.SecurityGroupUpdate(auth, securityGroupID).SecurityGroupRequest(securityGroupRequest).Execute()
-
-		lastResponse = response
-		if err != nil {
-			lastAPIError = tools.ExtractErrorMessage(response)
-			statusCode := 0
-			if response != nil {
-				statusCode = response.StatusCode
-			}
-
-			// Check if this is a state conflict error that should be retried
-			if retry.IsStateConflictError(err, statusCode, lastAPIError) {
-				tflog.Warn(ctx, "Security group update failed due to state conflict, will retry", map[string]interface{}{
-					"security_group_id": stateData.Id.ValueString(),
-					"status_code":       statusCode,
-					"error":             lastAPIError,
-				})
-				return err
-			}
-
-			// Non-retryable error
-			return fmt.Errorf("non-retryable error: %w", err)
-		}
-
-		updatedSecurityGroup = sgResult
-		return nil
-	})
+	securityGroup, response, err = r.apiClient.SecurityGroupsAPI.SecurityGroupUpdate(auth, tools.StringToInt32(stateData.Id.ValueString())).SecurityGroupRequest(securityGroupRequest).Execute()
 
 	if err != nil {
-		resourceErr := errors.NewError("emma_security_group", "Update").
-			WithID(stateData.Id.ValueString()).
-			WithAPIError(lastAPIError).
-			WithCause(err).
-			Build()
-
-		if lastResponse != nil {
-			resourceErr.StatusCode = lastResponse.StatusCode
-			resourceErr.Message = errors.MapHTTPError(lastResponse.StatusCode, lastAPIError)
-		} else {
-			resourceErr.Message = "Unable to update security group"
-		}
-
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to update security group, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 
-	tflog.Info(ctx, "Security group update initiated, waiting for recomposition to complete", map[string]interface{}{
-		"security_group_id": stateData.Id.ValueString(),
-	})
-
-	// Wait for security group to reach RECOMPOSED state after update
-	if err := stateManager.WaitForStableState(auth); err != nil {
-		tflog.Warn(ctx, "Security group did not reach RECOMPOSED state after update within timeout", map[string]interface{}{
-			"security_group_id": stateData.Id.ValueString(),
-			"error":             err.Error(),
-		})
-		// Don't fail the operation, just log the warning
-		// The security group update was successful, it's just taking longer to recompose
-	} else {
-		tflog.Info(ctx, "Security group recomposition completed successfully", map[string]interface{}{
-			"security_group_id": stateData.Id.ValueString(),
-		})
-	}
-
-	ConvertSecurityGroupResponseToResource(ctx, &planData, &stateData, updatedSecurityGroup, &resp.Diagnostics)
+	ConvertSecurityGroupResponseToResource(ctx, &planData, &stateData, securityGroup, &resp.Diagnostics)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -433,71 +293,37 @@ func (r *securityGroupResource) Delete(ctx context.Context, req resource.DeleteR
 	tflog.Info(ctx, "Delete security group")
 
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	
-	// Wait for security group to be synchronized and recomposed
-	syncPoller := async.NewPoller(async.PollerConfig{
-		Timeout:      3 * time.Minute, // 36 * 5 seconds = 3 minutes
-		PollInterval: 5 * time.Second,
-		StatusChecker: func(ctx context.Context) (string, error) {
-			securityGroup, response, err := r.apiClient.SecurityGroupsAPI.GetSecurityGroup(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
-			if err != nil {
-				statusCode := 0
-				if response != nil {
-					statusCode = response.StatusCode
-				}
-				return "", fmt.Errorf("failed to get security group status: %s", errors.MapHTTPError(statusCode, tools.ExtractErrorMessage(response)))
-			}
-			
-			// Check if synchronized and recomposed
-			if *securityGroup.SynchronizationStatus == "SYNCHRONIZED" && *securityGroup.RecomposingStatus == "RECOMPOSED" {
-				// Also check if there are no instances attached
-				securityGroupInstances, response, err := r.apiClient.SecurityGroupsAPI.SecurityGroupInstances(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
-				if err != nil {
-					statusCode := 0
-					if response != nil {
-						statusCode = response.StatusCode
-					}
-					return "", fmt.Errorf("failed to get security group instances: %s", errors.MapHTTPError(statusCode, tools.ExtractErrorMessage(response)))
-				}
-				
-				if len(securityGroupInstances) == 0 {
-					return "READY_FOR_DELETE", nil
-				}
-				return "HAS_INSTANCES", nil
-			}
-			
-			return fmt.Sprintf("%s/%s", *securityGroup.SynchronizationStatus, *securityGroup.RecomposingStatus), nil
-		},
-		TargetStates:  []string{"READY_FOR_DELETE"},
-		FailureStates: []string{},
-	})
-	
-	if err := syncPoller.Poll(ctx); err != nil {
-		resourceErr := errors.NewError("emma_security_group", "Delete").
-			WithID(data.Id.ValueString()).
-			WithMessage(fmt.Sprintf("Timeout waiting for security group to be ready for deletion: %s", err.Error())).
-			WithCause(err).
-			Build()
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
-		return
+	i := 0
+	for i < 36 {
+		i++
+		securityGroup, response, err := r.apiClient.SecurityGroupsAPI.GetSecurityGroup(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
+		if *securityGroup.SynchronizationStatus != "SYNCHRONIZED" || *securityGroup.RecomposingStatus != "RECOMPOSED" {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		securityGroupInstances, response, err := r.apiClient.SecurityGroupsAPI.SecurityGroupInstances(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
+		if err != nil {
+			resp.Diagnostics.AddError("Client Error",
+				fmt.Sprintf("Unable to get security group instances, got error: %s, %s",
+					tools.ExtractErrorMessage(response), err))
+			return
+		}
+
+		if len(securityGroupInstances) != 0 {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		break
 	}
 
 	_, response, err := r.apiClient.SecurityGroupsAPI.SecurityGroupDelete(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	if err != nil {
-		statusCode := 0
-		if response != nil {
-			statusCode = response.StatusCode
-		}
-		resourceErr := errors.NewError("emma_security_group", "Delete").
-			WithID(data.Id.ValueString()).
-			WithStatusCode(statusCode).
-			WithAPIError(tools.ExtractErrorMessage(response)).
-			WithMessage(errors.MapHTTPError(statusCode, tools.ExtractErrorMessage(response))).
-			WithCause(err).
-			Build()
-		resp.Diagnostics.AddError("Client Error", resourceErr.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to delete security group, got error: %s",
+				tools.ExtractErrorMessage(response)))
 		return
 	}
 }
