@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	emmaSdk "github.com/emma-community/emma-go-sdk"
+	"github.com/emma-community/terraform-provider-emma/internal/emma/common/async"
 	"github.com/emma-community/terraform-provider-emma/internal/emma/common/errors"
+	"github.com/emma-community/terraform-provider-emma/internal/emma/common/state"
 	"github.com/emma-community/terraform-provider-emma/tools"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -138,10 +140,41 @@ func (r *subnetworkResource) Create(ctx context.Context, req resource.CreateRequ
 
 	ConvertSubnetworkResponseToResource(&data, subnetwork)
 
-	// API Create response may omit subnetworkPrefix; set to null to avoid "unknown after apply" error
-	if data.SubnetworkPrefix.IsUnknown() {
-		data.SubnetworkPrefix = types.StringNull()
+	subnetworkId := data.Id.ValueString()
+
+	stateManager := state.NewStateTransitionManager(state.StateTransitionConfig{
+		ResourceType: "subnetwork",
+		ResourceID:   subnetworkId,
+		StatusChecker: func(ctx context.Context) (string, error) {
+			sn, _, err := r.apiClient.SubnetworksAPI.GetSubnetwork(auth, subnetworkId).Execute()
+			if err != nil {
+				return "", err
+			}
+			if sn.Status == nil {
+				return "", fmt.Errorf("subnetwork status is nil")
+			}
+			return *sn.Status, nil
+		},
+		TargetStates:       state.SubnetworkStableStates,
+		TransitionalStates: state.SubnetworkTransitionalStates,
+		FailureStates:      state.SubnetworkFailureStates,
+		Timeout:            async.DefaultTimeout,
+		PollInterval:       async.DefaultPollInterval,
+	})
+
+	if err := stateManager.WaitForStableState(auth); err != nil {
+		resp.Diagnostics.AddError("State Transition Error",
+			fmt.Sprintf("Subnetwork did not reach active state after create: %s", err.Error()))
+		return
 	}
+
+	subnetworkRefreshed, _, err := r.apiClient.SubnetworksAPI.GetSubnetwork(auth, subnetworkId).Execute()
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("Unable to read subnetwork after create: %s", err.Error()))
+		return
+	}
+	ConvertSubnetworkResponseToResource(&data, subnetworkRefreshed)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

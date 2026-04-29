@@ -133,9 +133,9 @@ func (d *volumeConfigurationsDataSource) Read(ctx context.Context, req datasourc
 	// Extract data_center_id from configuration
 	dataCenterId := data.DataCenterId.ValueString()
 
-	// Call Emma API to get volume configurations
+	// Call Emma API to get volume configurations for data volumes (non-bootable)
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *d.token.AccessToken)
-	configs, response, err := d.apiClient.VolumesConfigurationsAPI.GetSystemVolumeConfigs(auth).Execute()
+	configs, response, err := d.apiClient.VolumesConfigurationsAPI.GetVolumeConfigs(auth).IsBootable(false).DataCenterId(dataCenterId).Execute()
 
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error",
@@ -144,8 +144,8 @@ func (d *volumeConfigurationsDataSource) Read(ctx context.Context, req datasourc
 		return
 	}
 
-	// Filter configurations by data_center_id and convert to list
-	configList, diags := convertVolumeConfigsToList(ctx, configs, dataCenterId)
+	// Convert to list (server-side filtering by data_center_id already applied)
+	configList, diags := convertVolumeConfigsToList(ctx, configs)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -173,26 +173,18 @@ func (o volumeConfigurationModel) attrTypes() map[string]attr.Type {
 }
 
 // convertVolumeConfigsToList converts Emma API volume configurations response to Terraform list
-// Filters configurations by the specified data_center_id
-func convertVolumeConfigsToList(ctx context.Context, configs *emmaSdk.GetSystemVolumeConfigs200Response, dataCenterId string) (types.List, diag.Diagnostics) {
+func convertVolumeConfigsToList(ctx context.Context, configs *emmaSdk.GetVolumeConfigs200Response) (types.List, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	var configModels []volumeConfigurationModel
 
 	// Check if configs is nil or has no content
 	if configs == nil || configs.Content == nil {
-		// Return empty list
 		emptyList, listDiags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: volumeConfigurationModel{}.attrTypes()}, []volumeConfigurationModel{})
 		diags.Append(listDiags...)
 		return emptyList, diags
 	}
 
-	// Convert each volume configuration that matches the data_center_id
 	for _, config := range configs.Content {
-		// Filter by data_center_id
-		if config.DataCenterId == nil || *config.DataCenterId != dataCenterId {
-			continue
-		}
-
 		configModel := volumeConfigurationModel{}
 
 		if config.ProviderId != nil {

@@ -21,6 +21,13 @@ var (
 	SecurityGroupFailureStates      = []string{"error", "failed"}
 )
 
+// Subnetwork states
+var (
+	SubnetworkStableStates       = []string{"active"}
+	SubnetworkTransitionalStates = []string{"BUSY", "draft"}
+	SubnetworkFailureStates      = []string{"error", "failed"}
+)
+
 // GetResourceStates returns state definitions for a resource type
 func GetResourceStates(resourceType string) (stable, transitional, failure []string) {
 	switch resourceType {
@@ -30,6 +37,8 @@ func GetResourceStates(resourceType string) (stable, transitional, failure []str
 		return VolumeStableStates, VolumeTransitionalStates, VolumeFailureStates
 	case "security_group":
 		return SecurityGroupStableStates, SecurityGroupTransitionalStates, SecurityGroupFailureStates
+	case "subnetwork":
+		return SubnetworkStableStates, SubnetworkTransitionalStates, SubnetworkFailureStates
 	default:
 		return []string{}, []string{}, []string{}
 	}

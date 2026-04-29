@@ -517,7 +517,37 @@ func (r *volumeResource) Update(ctx context.Context, req resource.UpdateRequest,
 			return
 		}
 
-		tflog.Info(ctx, "Volume resize completed successfully", map[string]interface{}{
+		tflog.Info(ctx, "Volume resize API call completed, waiting for stable state", map[string]interface{}{
+			"volume_id": stateData.Id.ValueString(),
+		})
+
+		postResizeStateManager := state.NewStateTransitionManager(state.StateTransitionConfig{
+			ResourceType: "volume",
+			ResourceID:   stateData.Id.ValueString(),
+			StatusChecker: func(ctx context.Context) (string, error) {
+				vol, _, err := r.apiClient.VolumesAPI.GetVolume(auth, volumeId).Execute()
+				if err != nil {
+					return "", err
+				}
+				if vol.Status == nil {
+					return "", fmt.Errorf("volume status is nil")
+				}
+				return *vol.Status, nil
+			},
+			TargetStates:       state.VolumeStableStates,
+			TransitionalStates: state.VolumeTransitionalStates,
+			FailureStates:      state.VolumeFailureStates,
+			Timeout:            async.DefaultTimeout,
+			PollInterval:       async.DefaultPollInterval,
+		})
+
+		if err := postResizeStateManager.WaitForStableState(auth); err != nil {
+			resp.Diagnostics.AddError("State Transition Error",
+				fmt.Sprintf("Volume did not reach stable state after resize: %s", err.Error()))
+			return
+		}
+
+		tflog.Info(ctx, "Volume reached stable state after resize", map[string]interface{}{
 			"volume_id": stateData.Id.ValueString(),
 		})
 	}
@@ -810,6 +840,33 @@ func (r *volumeResource) Update(ctx context.Context, req resource.UpdateRequest,
 				"volume_id": stateData.Id.ValueString(),
 			})
 		}
+	}
+
+	// Wait for volume to reach stable state before final read
+	finalStateManager := state.NewStateTransitionManager(state.StateTransitionConfig{
+		ResourceType: "volume",
+		ResourceID:   stateData.Id.ValueString(),
+		StatusChecker: func(ctx context.Context) (string, error) {
+			vol, _, err := r.apiClient.VolumesAPI.GetVolume(auth, volumeId).Execute()
+			if err != nil {
+				return "", err
+			}
+			if vol.Status == nil {
+				return "", fmt.Errorf("volume status is nil")
+			}
+			return *vol.Status, nil
+		},
+		TargetStates:       state.VolumeStableStates,
+		TransitionalStates: state.VolumeTransitionalStates,
+		FailureStates:      state.VolumeFailureStates,
+		Timeout:            async.DefaultTimeout,
+		PollInterval:       async.DefaultPollInterval,
+	})
+
+	if err := finalStateManager.WaitForStableState(auth); err != nil {
+		resp.Diagnostics.AddError("State Transition Error",
+			fmt.Sprintf("Volume did not reach stable state after updates: %s", err.Error()))
+		return
 	}
 
 	// Refresh volume state after updates
