@@ -47,7 +47,6 @@ var invalidIpValues = []struct {
 	{"1.1.-1.1"},
 	{"1.1.1.-1"},
 	{"1.1.1.1/"},
-	{"1.1.1.1/0"},
 	{"1.1.1.1/33"},
 	{"1.1.1.1/-1"},
 	{"1.1.1.1\\32"},
@@ -59,6 +58,8 @@ var validIpValues = []struct {
 }{
 	{"1.1.1.1"},
 	{"0.0.0.0"},
+	{"0.0.0.0/0"},
+	{"1.1.1.1/0"},
 	{"1.1.1.1/32"},
 	{"1.1.1.1/1"},
 	{"255.255.255.255/32"},
@@ -116,7 +117,7 @@ func TestIpRange_ValidateString_InvalidValues(t *testing.T) {
 		assert.Equal(t, 1, resp.Diagnostics.ErrorsCount())
 		if resp.Diagnostics.HasError() {
 			actualMsg := resp.Diagnostics.Errors()[0].Detail()
-			assert.Equal(t, "test is invalid, may contain next values: 0.0.0.0, 1.1.1.1 or 1.1.1.1/32", actualMsg)
+			assert.Equal(t, "test is invalid, may contain next values: 0.0.0.0, 0.0.0.0/0, 1.1.1.1 or 1.1.1.1/32", actualMsg)
 		} else {
 			assert.Fail(t, "Is valid ip value: "+invalidIpValue.in)
 		}

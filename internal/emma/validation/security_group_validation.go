@@ -57,7 +57,7 @@ func (v IpRange) ValidateString(ctx context.Context, req validator.StringRequest
 		return
 	}
 	if !isValidIpRangeValue(req.ConfigValue.ValueString()) {
-		resp.Diagnostics.AddError("Validation Error", req.Path.String()+" is invalid, may contain next values: 0.0.0.0, 1.1.1.1 or 1.1.1.1/32")
+		resp.Diagnostics.AddError("Validation Error", req.Path.String()+" is invalid, may contain next values: 0.0.0.0, 0.0.0.0/0, 1.1.1.1 or 1.1.1.1/32")
 	}
 }
 
@@ -213,7 +213,7 @@ func isValidOctetValue(octetValue int) bool {
 }
 
 func isValidPrefixLength(prefixLength int) bool {
-	if prefixLength < 1 || prefixLength > 32 {
+	if prefixLength < 0 || prefixLength > 32 {
 		return false
 	}
 	return true
