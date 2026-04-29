@@ -137,10 +137,7 @@ func isValidPortsValue(ports string) bool {
 
 		start, _ := strconv.Atoi(parts[0])
 		end, _ := strconv.Atoi(parts[1])
-		if end < start {
-			return false
-		}
-		return true
+		return end >= start
 	}
 	return isValidSinglePortValue(ports)
 }

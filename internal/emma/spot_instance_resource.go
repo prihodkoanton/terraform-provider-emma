@@ -312,7 +312,7 @@ func (r *spotInstanceResource) Create(ctx context.Context, req resource.CreateRe
 	var spotInstanceCreateRequest emmaSdk.SpotCreate
 	ConvertToSpotInstanceCreateRequest(data, &spotInstanceCreateRequest)
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	spotInstance, response, err := r.apiClient.SpotInstancesAPI.SpotCreate(auth).SpotCreate(spotInstanceCreateRequest).Execute()
+	spotVm, response, err := r.apiClient.SpotInstancesAPI.SpotCreate(auth).SpotCreate(spotInstanceCreateRequest).Execute()
 
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error",
@@ -321,7 +321,7 @@ func (r *spotInstanceResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	ConvertSpotInstanceResponseToResource(ctx, &data, nil, spotInstance, resp.Diagnostics)
+	ConvertSpotVmResponseToResource(ctx, &data, nil, spotVm, resp.Diagnostics)
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -342,7 +342,7 @@ func (r *spotInstanceResource) Read(ctx context.Context, req resource.ReadReques
 	// If applicable, this is a great opportunity to initialize any necessary
 	// provider client data and make a call using it.
 	auth := context.WithValue(ctx, emmaSdk.ContextAccessToken, *r.token.AccessToken)
-	spotInstance, response, err := r.apiClient.SpotInstancesAPI.GetSpot(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
+	spotVm, response, err := r.apiClient.SpotInstancesAPI.GetSpot(auth, tools.StringToInt32(data.Id.ValueString())).Execute()
 
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error",
@@ -351,7 +351,7 @@ func (r *spotInstanceResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	ConvertSpotInstanceResponseToResource(ctx, &data, nil, spotInstance, resp.Diagnostics)
+	ConvertSpotVmResponseToResource(ctx, &data, nil, spotVm, resp.Diagnostics)
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -556,4 +556,97 @@ func (o spotInstanceResourceNetworkModel) attrTypes() map[string]attr.Type {
 		"network_type_id": types.Int64Type,
 		"network_type":    types.StringType,
 	}
+}
+
+
+// ConvertSpotVmResponseToResource wraps ConvertSpotInstanceResponseToResource for SpotVm type
+func ConvertSpotVmResponseToResource(ctx context.Context, stateData *spotInstanceResourceModel, planData *spotInstanceResourceModel, spotVm *emmaSdk.SpotVm, diags diag.Diagnostics) {
+	// Convert SpotVm to Vm by copying fields
+	vm := &emmaSdk.Vm{
+		Id:               spotVm.Id,
+		Name:             spotVm.Name,
+		Status:           spotVm.Status,
+		VCpu:             spotVm.VCpu,
+		VCpuType:         spotVm.VCpuType,
+		CloudNetworkType: spotVm.CloudNetworkType,
+		RamGb:            spotVm.RamGb,
+		SshKeyId:         spotVm.SshKeyId,
+		UserPassword:     spotVm.UserPassword,
+	}
+	
+	// Convert nested objects - only copy fields that exist in both types
+	if spotVm.Provider != nil {
+		vm.Provider = &emmaSdk.VmProvider{
+			Id:   spotVm.Provider.Id,
+			Name: spotVm.Provider.Name,
+			// Type field doesn't exist in SpotVmProvider
+		}
+	}
+	
+	if spotVm.Location != nil {
+		vm.Location = &emmaSdk.VmLocation{
+			Id:   spotVm.Location.Id,
+			Name: spotVm.Location.Name,
+			// Country field doesn't exist in VmLocation in v0.0.10
+		}
+	}
+	
+	if spotVm.DataCenter != nil {
+		vm.DataCenter = &emmaSdk.VmDataCenter{
+			Id:   spotVm.DataCenter.Id,
+			Name: spotVm.DataCenter.Name,
+		}
+	}
+	
+	if spotVm.Os != nil {
+		vm.Os = &emmaSdk.VmOs{
+			Id: spotVm.Os.Id,
+			// Name field doesn't exist in SpotVmOs
+		}
+	}
+	
+	if spotVm.SecurityGroup != nil {
+		vm.SecurityGroup = &emmaSdk.VmSecurityGroup{
+			Id:   spotVm.SecurityGroup.Id,
+			Name: spotVm.SecurityGroup.Name,
+		}
+	}
+	
+	if spotVm.Cost != nil {
+		vm.Cost = &emmaSdk.VmCost{
+			Currency: spotVm.Cost.Currency,
+			Price:    spotVm.Cost.Price,
+			Unit:     spotVm.Cost.Unit,
+		}
+	}
+	
+	// Convert disks
+	if spotVm.Disks != nil {
+		vm.Disks = make([]emmaSdk.VmDisksInner, len(spotVm.Disks))
+		for i, disk := range spotVm.Disks {
+			vm.Disks[i] = emmaSdk.VmDisksInner{
+				Id:         disk.Id,
+				SizeGb:     disk.SizeGb,
+				TypeId:     disk.TypeId,
+				Type:       disk.Type,
+				IsBootable: disk.IsBootable,
+			}
+		}
+	}
+	
+	// Convert networks
+	if spotVm.Networks != nil {
+		vm.Networks = make([]emmaSdk.VmNetworksInner, len(spotVm.Networks))
+		for i, network := range spotVm.Networks {
+			vm.Networks[i] = emmaSdk.VmNetworksInner{
+				Id:            network.Id,
+				Ip:            network.Ip,
+				NetworkTypeId: network.NetworkTypeId,
+				NetworkType:   network.NetworkType,
+			}
+		}
+	}
+	
+	// Call the existing conversion function
+	ConvertSpotInstanceResponseToResource(ctx, stateData, planData, vm, diags)
 }
