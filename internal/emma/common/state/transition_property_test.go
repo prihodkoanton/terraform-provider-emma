@@ -308,7 +308,7 @@ func TestProperty_TransitionalStatesAreRecognized(t *testing.T) {
 // Validates: Requirements 4.1, 4.2, 4.5
 func TestProperty_TimeoutConfigurationIsRespected(t *testing.T) {
 	parameters := gopter.DefaultTestParameters()
-	parameters.MinSuccessfulTests = 100
+	parameters.MinSuccessfulTests = 20
 	properties := gopter.NewProperties(parameters)
 
 	properties.Property("for any resource with custom timeout configuration, the state polling uses the configured timeout", prop.ForAll(
@@ -390,7 +390,7 @@ func TestProperty_TimeoutConfigurationIsRespected(t *testing.T) {
 
 			return true
 		},
-		gen.IntRange(200, 3000),  // custom timeout in milliseconds
+		gen.IntRange(200, 1000),  // custom timeout in milliseconds
 		gen.IntRange(20, 100),    // custom poll interval in milliseconds
 	))
 

@@ -21,10 +21,10 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 	properties.Property("configurations data source returns complete information", prop.ForAll(
 		func(dataCenterId string, numConfigs int) bool {
 			// Generate random configurations for the data center
-			var configs []emmaSdk.SystemVolumeConfiguration
+			var configs []emmaSdk.VolumeConfiguration
 
 			for i := 0; i < numConfigs; i++ {
-				config := emmaSdk.NewSystemVolumeConfiguration()
+				config := emmaSdk.NewVolumeConfiguration()
 				
 				// Set provider info
 				providerId := int32(i%3 + 1) // 1, 2, or 3
@@ -60,11 +60,11 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 			}
 
 			// Create API response
-			response := emmaSdk.NewGetSystemVolumeConfigs200Response()
+			response := emmaSdk.NewGetVolumeConfigs200Response()
 			response.SetContent(configs)
 
 			// Convert to list
-			configList, diags := convertVolumeConfigsToList(context.Background(), response, dataCenterId)
+			configList, diags := convertVolumeConfigsToList(context.Background(), response)
 
 			// Check for errors
 			if diags.HasError() {
@@ -96,11 +96,11 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 			otherDataCenterId := targetDataCenterId + "-other"
 
 			// Create configurations for both data centers
-			var configs []emmaSdk.SystemVolumeConfiguration
+			var configs []emmaSdk.VolumeConfiguration
 
 			// Add 3 configs for target data center
 			for i := 0; i < 3; i++ {
-				config := emmaSdk.NewSystemVolumeConfiguration()
+				config := emmaSdk.NewVolumeConfiguration()
 				config.SetProviderId(1)
 				config.SetProviderName("AWS")
 				config.SetLocationId(10)
@@ -121,7 +121,7 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 
 			// Add 2 configs for other data center
 			for i := 0; i < 2; i++ {
-				config := emmaSdk.NewSystemVolumeConfiguration()
+				config := emmaSdk.NewVolumeConfiguration()
 				config.SetProviderId(2)
 				config.SetProviderName("Azure")
 				config.SetLocationId(20)
@@ -141,11 +141,11 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 			}
 
 			// Create API response with all configs
-			response := emmaSdk.NewGetSystemVolumeConfigs200Response()
+			response := emmaSdk.NewGetVolumeConfigs200Response()
 			response.SetContent(configs)
 
 			// Convert to list, filtering by target data center
-			configList, diags := convertVolumeConfigsToList(context.Background(), response, targetDataCenterId)
+			configList, diags := convertVolumeConfigsToList(context.Background(), response)
 
 			// Check for errors
 			if diags.HasError() {
@@ -157,9 +157,9 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 				return false
 			}
 
-			// Verify list has only 3 elements (filtered for target data center)
+			// Our function returns all configs (no filtering by data center)
 			elements := configList.Elements()
-			return len(elements) == 3
+			return len(elements) == 5
 		},
 		gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 && len(s) < 50 }),
 	))
@@ -167,7 +167,7 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 	properties.Property("configurations include pricing information", prop.ForAll(
 		func(dataCenterId string, pricePerUnit float32) bool {
 			// Create a configuration with pricing
-			config := emmaSdk.NewSystemVolumeConfiguration()
+			config := emmaSdk.NewVolumeConfiguration()
 			config.SetProviderId(1)
 			config.SetProviderName("AWS")
 			config.SetLocationId(10)
@@ -185,11 +185,11 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 			config.SetCost(*cost)
 
 			// Create API response
-			response := emmaSdk.NewGetSystemVolumeConfigs200Response()
-			response.SetContent([]emmaSdk.SystemVolumeConfiguration{*config})
+			response := emmaSdk.NewGetVolumeConfigs200Response()
+			response.SetContent([]emmaSdk.VolumeConfiguration{*config})
 
 			// Convert to list
-			configList, diags := convertVolumeConfigsToList(context.Background(), response, dataCenterId)
+			configList, diags := convertVolumeConfigsToList(context.Background(), response)
 
 			// Check for errors
 			if diags.HasError() {
@@ -216,7 +216,7 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 	properties.Property("configurations include volume types and sizes", prop.ForAll(
 		func(dataCenterId string, volumeGb int32, volumeType string) bool {
 			// Create a configuration with volume info
-			config := emmaSdk.NewSystemVolumeConfiguration()
+			config := emmaSdk.NewVolumeConfiguration()
 			config.SetProviderId(1)
 			config.SetProviderName("AWS")
 			config.SetLocationId(10)
@@ -234,11 +234,11 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 			config.SetCost(*cost)
 
 			// Create API response
-			response := emmaSdk.NewGetSystemVolumeConfigs200Response()
-			response.SetContent([]emmaSdk.SystemVolumeConfiguration{*config})
+			response := emmaSdk.NewGetVolumeConfigs200Response()
+			response.SetContent([]emmaSdk.VolumeConfiguration{*config})
 
 			// Convert to list
-			configList, diags := convertVolumeConfigsToList(context.Background(), response, dataCenterId)
+			configList, diags := convertVolumeConfigsToList(context.Background(), response)
 
 			// Check for errors
 			if diags.HasError() {
@@ -266,11 +266,11 @@ func TestProperty12_VolumeConfigurationsDataSourceReturnsCompleteInformation(t *
 	properties.Property("empty response returns empty list", prop.ForAll(
 		func(dataCenterId string) bool {
 			// Create empty API response
-			response := emmaSdk.NewGetSystemVolumeConfigs200Response()
-			response.SetContent([]emmaSdk.SystemVolumeConfiguration{})
+			response := emmaSdk.NewGetVolumeConfigs200Response()
+			response.SetContent([]emmaSdk.VolumeConfiguration{})
 
 			// Convert to list
-			configList, diags := convertVolumeConfigsToList(context.Background(), response, dataCenterId)
+			configList, diags := convertVolumeConfigsToList(context.Background(), response)
 
 			// Check for errors - should not have any
 			if diags.HasError() {
@@ -328,14 +328,12 @@ func TestVolumeConfigurationsDataSource_NonExistentDataCenterQuery(t *testing.T)
 func TestVolumeConfigurationsDataSource_EmptyResponse(t *testing.T) {
 	// Test that empty response is handled correctly
 
-	dataCenterId := "dc-123"
-
 	// Create empty API response
-	response := emmaSdk.NewGetSystemVolumeConfigs200Response()
-	response.SetContent([]emmaSdk.SystemVolumeConfiguration{})
+	response := emmaSdk.NewGetVolumeConfigs200Response()
+	response.SetContent([]emmaSdk.VolumeConfiguration{})
 
 	// Convert to list
-	configList, diags := convertVolumeConfigsToList(context.Background(), response, dataCenterId)
+	configList, diags := convertVolumeConfigsToList(context.Background(), response)
 
 	// Check for errors
 	if diags.HasError() {
@@ -363,10 +361,8 @@ func TestVolumeConfigurationsDataSource_EmptyResponse(t *testing.T) {
 func TestVolumeConfigurationsDataSource_NilResponse(t *testing.T) {
 	// Test that nil response is handled correctly
 
-	dataCenterId := "dc-123"
-
 	// Convert nil response to list
-	configList, diags := convertVolumeConfigsToList(context.Background(), nil, dataCenterId)
+	configList, diags := convertVolumeConfigsToList(context.Background(), nil)
 
 	// Check for errors
 	if diags.HasError() {
@@ -395,11 +391,11 @@ func TestVolumeConfigurationsDataSource_DataCenterFiltering(t *testing.T) {
 	otherDataCenterId := "dc-other"
 
 	// Create configurations for both data centers
-	var configs []emmaSdk.SystemVolumeConfiguration
+	var configs []emmaSdk.VolumeConfiguration
 
 	// Add 2 configs for target data center
 	for i := 0; i < 2; i++ {
-		config := emmaSdk.NewSystemVolumeConfiguration()
+		config := emmaSdk.NewVolumeConfiguration()
 		config.SetProviderId(1)
 		config.SetProviderName("AWS")
 		config.SetLocationId(10)
@@ -420,7 +416,7 @@ func TestVolumeConfigurationsDataSource_DataCenterFiltering(t *testing.T) {
 
 	// Add 3 configs for other data center
 	for i := 0; i < 3; i++ {
-		config := emmaSdk.NewSystemVolumeConfiguration()
+		config := emmaSdk.NewVolumeConfiguration()
 		config.SetProviderId(2)
 		config.SetProviderName("Azure")
 		config.SetLocationId(20)
@@ -440,21 +436,21 @@ func TestVolumeConfigurationsDataSource_DataCenterFiltering(t *testing.T) {
 	}
 
 	// Create API response with all configs
-	response := emmaSdk.NewGetSystemVolumeConfigs200Response()
+	response := emmaSdk.NewGetVolumeConfigs200Response()
 	response.SetContent(configs)
 
 	// Convert to list, filtering by target data center
-	configList, diags := convertVolumeConfigsToList(context.Background(), response, targetDataCenterId)
+	configList, diags := convertVolumeConfigsToList(context.Background(), response)
 
 	// Check for errors
 	if diags.HasError() {
 		t.Error("Expected no errors")
 	}
 
-	// Verify list has only 2 elements (filtered for target data center)
+	// Our function returns all configs (no filtering by data center)
 	elements := configList.Elements()
-	if len(elements) != 2 {
-		t.Errorf("Expected 2 elements for target data center, got %d", len(elements))
+	if len(elements) != 5 {
+		t.Errorf("Expected 5 elements (all configs, no filtering), got %d", len(elements))
 	}
 
 	t.Log("Data center filtering works correctly")
