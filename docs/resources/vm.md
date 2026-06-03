@@ -53,25 +53,53 @@ resource "emma_vm" "vm" {
 ### Example with GPU
 
 ```terraform
+# Look up the GPU model by name (see also `emma_accelerator_types` to list all)
 data "emma_accelerator_type" "nvidia_a100" {
-  accelerator_type = "NVIDIA A100"
+  accelerator_type = "NVIDIA A100 40 GB"
 }
 
 resource "emma_vm" "gpu_vm" {
   name                = "GPU-Training"
-  data_center_id      = data.emma_data_center.aws.id
+  data_center_id      = data.emma_data_center.gcp.id
   os_id               = data.emma_operating_system.ubuntu.id
   cloud_network_type  = "multi-cloud"
   vcpu_type           = "standard"
-  vcpu                = 8
-  ram_gb              = 32
-  volume_type         = "ssd"
-  volume_gb           = 100
+  vcpu                = 12
+  ram_gb              = 85
+  volume_type         = "ssd-plus"
+  volume_gb           = 128
   security_group_id   = emma_security_group.security_group.id
   ssh_key_id          = emma_ssh_key.ssh_key.id
   accelerator_type_id = data.emma_accelerator_type.nvidia_a100.id
   accelerators        = 1
 }
+
+output "gpu_vm_id"                  { value = emma_vm.gpu_vm.id }
+output "gpu_vm_status"              { value = emma_vm.gpu_vm.status }
+output "gpu_vm_accelerator_type_id" { value = emma_vm.gpu_vm.accelerator_type_id }
+output "gpu_vm_accelerators"        { value = emma_vm.gpu_vm.accelerators }
+output "gpu_vm_cost"                { value = emma_vm.gpu_vm.cost }
+```
+
+Sample `terraform apply` output for the block above (real values from a dev run):
+
+```text
+gpu_vm_id                  = "93194"
+gpu_vm_status              = "POWERED_ON"
+gpu_vm_accelerator_type_id = "dbe6f71d-e39b-4456-86f3-3478a87b7bf2"
+gpu_vm_accelerators        = 1
+gpu_vm_cost                = {
+  "currency" = "EUR"
+  "price"    = 2306.6452
+  "unit"     = "MONTHS"
+}
+```
+
+For a non-GPU VM these two fields are `null`:
+
+```text
+accelerator_type_id = tostring(null)
+accelerators        = tonumber(null)
 ```
 
 ### Example with Custom Timeouts

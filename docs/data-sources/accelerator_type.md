@@ -14,23 +14,46 @@ Use this data source to look up the ID of a GPU accelerator type by name. The re
 
 ## How to Find Available Accelerator Types
 
-The provider does not currently have a data source that lists all accelerator types. To discover available GPU types, use the Emma API directly:
+Use the [`emma_accelerator_types`](accelerator_types.md) data source to list every GPU model the platform exposes, then pick the one you need:
 
-```bash
-# 1. Get an access token
-TOKEN=$(curl -s -X POST 'https://api.emma.ms/external/v1/issue-token' \
-  -H 'Content-Type: application/json' \
-  -d '{"clientId":"YOUR_CLIENT_ID","clientSecret":"YOUR_CLIENT_SECRET"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+```terraform
+data "emma_accelerator_types" "all" {}
 
-# 2. List all available accelerator types
-curl -s -H "Authorization: Bearer $TOKEN" \
-  'https://api.emma.ms/external/v1/accelerator-types' | python3 -m json.tool
+output "available_gpus" {
+  value = [for t in data.emma_accelerator_types.all.accelerator_types : t.accelerator_type]
+}
 ```
 
-Then use the `accelerator_type` name from the response in the data source lookup.
+Sample `terraform apply` output (real values from a dev run, 2026-06):
 
-### Available Accelerator Types
+```text
+available_gpus = [
+  "NVIDIA T4",
+  "NVIDIA A10",
+  "NVIDIA A10G",
+  "NVIDIA A100 40 GB",
+  "NVIDIA A100 80 GB",
+  "NVIDIA L4",
+  "NVIDIA L40S",
+  "NVIDIA H100 80 GB",
+  "NVIDIA H100 94 GB",
+  "NVIDIA H200",
+  "NVIDIA B200 Blackwell",
+  "NVIDIA B200 Blackwell 180 GB",
+  "NVIDIA Tesla V100 32 GB",
+  "NVIDIA Tesla M60",
+  "NVIDIA RTX PRO 5000 48 GB",
+  "NVIDIA RTX PRO 6000",
+  "AMD Instinct MI25",
+  "AMD Instinct MI300X",
+  "AMD Radeon Pro V520",
+  "AMD Radeon Pro V710",
+]
+```
+
+Once you know the name, pass it back into `emma_accelerator_type` to get the ID for use in a VM/spot resource.
+
+### Available Accelerator Types (quick reference)
 
 | Name | Provider availability |
 |------|---------------------|

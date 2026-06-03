@@ -63,6 +63,7 @@ resource "emma_spot_instance" "spot_instance" {
 ### Example with GPU
 
 ```terraform
+# Look up the GPU model by name (see also `emma_accelerator_types` to list all)
 data "emma_accelerator_type" "nvidia_t4" {
   accelerator_type = "NVIDIA T4"
 }
@@ -83,6 +84,29 @@ resource "emma_spot_instance" "gpu_spot" {
   accelerator_type_id = data.emma_accelerator_type.nvidia_t4.id
   accelerators        = 1
 }
+
+output "gpu_spot_id"                  { value = emma_spot_instance.gpu_spot.id }
+output "gpu_spot_status"              { value = emma_spot_instance.gpu_spot.status }
+output "gpu_spot_accelerator_type_id" { value = emma_spot_instance.gpu_spot.accelerator_type_id }
+output "gpu_spot_accelerators"        { value = emma_spot_instance.gpu_spot.accelerators }
+output "gpu_spot_price"               { value = emma_spot_instance.gpu_spot.price }
+```
+
+Sample `terraform apply` output (real values from a dev run with AWS spot):
+
+```text
+gpu_spot_id                  = "93202"
+gpu_spot_status              = "POWERED_ON"
+gpu_spot_accelerator_type_id = "1e8f1205-d9be-4c21-96ad-45ae868319c9"
+gpu_spot_accelerators        = 1
+gpu_spot_price               = 0.15
+```
+
+For a non-GPU spot, the accelerator fields are `null`:
+
+```text
+accelerator_type_id = tostring(null)
+accelerators        = tonumber(null)
 ```
 
 ### Example with Custom Timeouts
